@@ -1,0 +1,109 @@
+services:
+  tta:
+    hostname: tta
+    extra_hosts:
+      - "tta:127.0.0.1"
+    image: ghcr.io/vuno/tta:${IMAGE_NAME:-tta}
+    ipc: host  # shared memory 제한 제거.
+    network_mode: host  # 별도 네트워크 대신 호스트의 네트워크를 사용하도록 함.
+    tty: true
+    init: true
+    stdin_open: true
+    volumes:  # 서버 고유 경로는 docker-compose.overrides.yaml 파일에 작성할 것.
+      - .:${PROJECT_ROOT:-/opt/lct}  # 현재 경로를 프로젝트 경로와 연결.
+        #  - ${HOME}/.vscode-server:/home/${USR}/.vscode-server  # VSCode 설치 유지 가능하도록 함.
+    working_dir: ${PROJECT_ROOT:-/opt/lct}
+    user: ${UID}:${GID}
+    environment: # 컨테이너 실행 중 내부에서 사용하는 환경변수.
+      TZ: ${TZ:-Asia/Seoul}
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+    build: # 이미지를 빌드하는 중 사용되는 변수.
+      target: ${TARGET_STAGE:-train}
+      context: .
+      dockerfile: Dockerfile
+      args: # Equivalent to `--build-arg`. 이미지 빌드 중 사용하는 환경변수.
+        LINUX_DISTRO: ${LINUX_DISTRO:-ubuntu}
+        DISTRO_VERSION: ${DISTRO_VERSION:-20.04}
+        CUDA_VERSION: ${CUDA_VERSION:-11.2.2}
+        CUDNN_VERSION: ${CUDNN_VERSION:-8}
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.10}
+        PROJECT_ROOT: ${PROJECT_ROOT:-/opt/lct}
+        PYTORCH_VERSION: ${PYTORCH_VERSION:-1.13.1}
+        TORCHVISION_VERSION: ${TORCHVISION_VERSION:-0.14.1}
+        PYTORCH_HOST: ${PYTORCH_HOST:-download.pytorch.org}
+        PYTORCH_INDEX_URL: ${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu117}
+        CONDA_URL: ${CONDA_URL:-https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh}
+        # Optional mirror links for faster `apt` package installation.
+#        DEB_OLD: ${DEB_OLD:-http://archive.ubuntu.com}
+#        DEB_NEW: ${DEB_NEW:-http://mirror.kakao.com}
+        GRP: ${GRP}
+        USR: ${USR}
+        GID: ${GID}
+        UID: ${UID}
+        TZ: ${TZ:-Asia/Seoul}
+        PILLOW_SIMD_VERSION: ${PILLOW_SIMD_VERSION:-9.0.0.post1}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  deploy:
+    hostname: lct
+    image: ghcr.io/vuno/lct-deploy:${IMAGE_NAME:-lct}
+    tty: true
+    init: true
+    stdin_open: true
+    volumes: # 서버 고유 경로는 docker-compose.overrides.yaml 파일에 작성할 것.
+      - .:${PROJECT_ROOT:-/opt/lct}  # 현재 경로를 프로젝트 경로와 연결.
+    working_dir: ${PROJECT_ROOT:-/opt/lct}
+    environment: # 컨테이너 실행 중 내부에서 사용하는 환경변수.
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      CUBLAS_WORKSPACE_CONFIG: ':4096:8'
+
+    build: # 이미지를 빌드하는 중 사용되는 변수.
+      target: ${TARGET_STAGE:-deploy}
+      context: .
+      dockerfile: Dockerfile
+      args: # Equivalent to `--build-arg`. 이미지 빌드 중 사용하는 환경변수.
+        LINUX_DISTRO: ${LINUX_DISTRO:-ubuntu}
+        DISTRO_VERSION: ${DISTRO_VERSION:-20.04}
+        CUDA_VERSION: ${CUDA_VERSION:-11.2.2}
+        CUDNN_VERSION: ${CUDNN_VERSION:-8}
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.10}
+        PROJECT_ROOT: ${PROJECT_ROOT:-/opt/lct}
+        PYTORCH_VERSION: ${PYTORCH_VERSION:-1.13.1}
+        TORCHVISION_VERSION: ${TORCHVISION_VERSION:-0.14.1}
+        PYTORCH_HOST: ${PYTORCH_HOST:-download.pytorch.org}
+        PYTORCH_INDEX_URL: ${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu117}
+        CONDA_URL: ${CONDA_URL:-https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  label:
+    hostname: lct
+    image: projectmonai/monailabel:latest
+    ipc: host
+    tty: true
+    init: true
+    stdin_open: true
+    network_mode: host
+    volumes:
+      - .:/workspace
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]

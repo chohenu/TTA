@@ -1,0 +1,12 @@
+services:
+  tta:
+    volumes:
+      - /home/hyeonwoocho:/mnt/home
+
+      - type: bind
+        source: /team/team_blu3/lung
+        target: /lung
+
+      - type: bind
+        source: /team/team_blu3/etc/personal
+        target: /personal
