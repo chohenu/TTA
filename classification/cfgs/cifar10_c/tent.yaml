@@ -29,5 +29,4 @@ OPTIM:
   BETA: 0.9
   LR: 1e-3
   WD: 0.
-DEVICE:
-  gpu: 1
+DEVICE: 5

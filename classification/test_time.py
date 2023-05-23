@@ -2,6 +2,7 @@ import os
 import logging
 import math
 import numpy as np
+import torch
 import torch.optim as optim
 import torch.nn as nn
 
@@ -41,7 +42,8 @@ def evaluate(description):
                            ]
     
     num_classes = get_num_classes(dataset_name=cfg.CORRUPTION.DATASET)
-    base_model = get_model(cfg, num_classes)
+    device = torch.device(f"cuda:{cfg.DEVICE}" if torch.cuda.is_available() else "cpu")
+    base_model = get_model(cfg, num_classes, device)
 
     logger.info(f"Setting up test-time adaptation method: {cfg.MODEL.ADAPTATION.upper()}")
     if cfg.MODEL.ADAPTATION == "source":  # BN--0
@@ -57,7 +59,7 @@ def evaluate(description):
     elif cfg.MODEL.ADAPTATION == "memo":
         model, param_names = setup_memo(base_model)
     elif cfg.MODEL.ADAPTATION == "tent":
-        model, param_names = setup_tent(base_model)
+        model, param_names = setup_tent(base_model, device)
     elif cfg.MODEL.ADAPTATION == "cotta":
         model, param_names = setup_cotta(base_model)
     elif cfg.MODEL.ADAPTATION == "lame":
@@ -75,7 +77,7 @@ def evaluate(description):
     elif cfg.MODEL.ADAPTATION == "gtta":
         model, param_names = setup_gtta(base_model, num_classes)
     elif cfg.MODEL.ADAPTATION == "rmt":
-        model, param_names = setup_rmt(base_model, num_classes)
+        model, param_names = setup_rmt(base_model, num_classes, device)
     else:
         raise ValueError(f"Adaptation method '{cfg.MODEL.ADAPTATION}' is not supported!")
 
@@ -131,7 +133,7 @@ def evaluate(description):
 
             acc, domain_dict = get_accuracy(
                 model, data_loader=test_data_loader, dataset_name=cfg.CORRUPTION.DATASET,
-                domain_name=domain_name, setting=cfg.SETTING, domain_dict=domain_dict)
+                domain_name=domain_name, setting=cfg.SETTING, domain_dict=domain_dict, device=device)
 
             err = 1. - acc
             errs.append(err)
@@ -213,14 +215,15 @@ def setup_memo(model):
     return memo_model, param_names
 
 
-def setup_tent(model):
+def setup_tent(model, device):
     model = Tent.configure_model(model)
     params, param_names = Tent.collect_params(model)
     optimizer = setup_optimizer(params)
     tent_model = Tent(model, optimizer,
                       steps=cfg.OPTIM.STEPS,
                       episodic=cfg.MODEL.EPISODIC,
-                      window_length=cfg.TEST.WINDOW_LENGTH)
+                      window_length=cfg.TEST.WINDOW_LENGTH,
+                      device=device)
     return tent_model, param_names
 
 
@@ -397,7 +400,7 @@ def setup_gtta(model, num_classes):
     return gtta_model, param_names
 
 
-def setup_rmt(model, num_classes):
+def setup_rmt(model, num_classes, device):
     model = RMT.configure_model(model)
     params, param_names = RMT.collect_params(model)
     optimizer = setup_optimizer(params)
@@ -406,7 +409,7 @@ def setup_rmt(model, num_classes):
                                       root_dir=cfg.DATA_DIR, adaptation=cfg.MODEL.ADAPTATION,
                                       batch_size=batch_size_src, ckpt_path=cfg.CKPT_PATH, percentage=cfg.SOURCE.PERCENTAGE,
                                       workers=min(cfg.SOURCE.NUM_WORKERS, os.cpu_count()))
-    rmt_model = RMT(model, optimizer,
+    rmt_model = RMT(device, model, optimizer,
                     steps=cfg.OPTIM.STEPS,
                     episodic=cfg.MODEL.EPISODIC,
                     window_length=cfg.TEST.WINDOW_LENGTH,

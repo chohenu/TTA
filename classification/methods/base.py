@@ -7,7 +7,7 @@ from models.model import ResNetDomainNet126
 
 
 class TTAMethod(nn.Module):
-    def __init__(self, model, optimizer, steps=1, episodic=False, window_length=1):
+    def __init__(self, model, optimizer, steps=1, episodic=False, window_length=1, device=None):
         super().__init__()
         self.model = model
         self.optimizer = optimizer
@@ -18,7 +18,7 @@ class TTAMethod(nn.Module):
         # variables needed for single sample test-time adaptation (sstta) using a sliding window (buffer) approach
         self.input_buffer = None
         self.window_length = window_length
-        self.pointer = torch.tensor([0], dtype=torch.long).cuda()
+        self.pointer = torch.tensor([0], dtype=torch.long).to(device)
         # sstta: if the model has no batchnorm layers, we do not need to forward the whole buffer when not performing any updates
         self.has_bn = any([isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)) for m in model.modules()])
 

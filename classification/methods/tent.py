@@ -9,8 +9,8 @@ class Tent(TTAMethod):
 
     Once tented, a model adapts itself by updating on every forward.
     """
-    def __init__(self, model, optimizer, steps, episodic, window_length):
-        super().__init__(model.cuda(), optimizer, steps, episodic, window_length)
+    def __init__(self, model, optimizer, steps, episodic, window_length, device):
+        super().__init__(model.to(device), optimizer, steps, episodic, window_length, device)
 
     @torch.enable_grad()  # ensure grads in possible no grad context for testing
     def forward_and_adapt(self, x):

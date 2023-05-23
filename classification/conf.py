@@ -27,13 +27,17 @@ cfg = _C
 _C.SETTING = "continual"
 
 # Data directory
-_C.DATA_DIR = "./data"
+# _C.DATA_DIR = "./data"
+_C.DATA_DIR = "/opt/tta/classification/data"
+
 
 # Weight directory
-_C.CKPT_DIR = "./ckpt"
+# _C.CKPT_DIR = "./ckpt"
+_C.CKPT_DIR = "/opt/tta/classification/ckpt"
 
 # Output directory
-_C.SAVE_DIR = "./output"
+# _C.SAVE_DIR = "./output"
+_C.SAVE_DIR = "/opt/tta/classification/output"
 
 # Path to a specific checkpoint
 _C.CKPT_PATH = ""
@@ -57,7 +61,7 @@ _C.DESC = ""
 # # Config destination (in SAVE_DIR)
 # _C.CFG_DEST = "cfg.yaml"
 
-
+_C.DEVICE = 1
 # ----------------------------- Model options ------------------------------- #
 _C.MODEL = CfgNode()
 

@@ -22,10 +22,12 @@ def update_ema_variables(ema_model, model, alpha_teacher):
 
 
 class RMT(TTAMethod):
-    def __init__(self, model, optimizer, steps, episodic, window_length, dataset_name, arch_name, num_classes, src_loader, ckpt_dir, ckpt_path,
+    def __init__(self, device, model, optimizer, steps, episodic, window_length, dataset_name, arch_name, num_classes, src_loader, ckpt_dir, ckpt_path,
                  contrast_mode, temperature, projection_dim, lambda_ce_src, lambda_ce_trg, lambda_cont, m_teacher_momentum, num_samples_warm_up):
-        super().__init__(model.cuda(), optimizer, steps, episodic, window_length)
+        super().__init__(model.to(device), optimizer, steps, episodic, window_length, device)
 
+        self.device = device
+        
         self.dataset_name = dataset_name
         self.num_classes = num_classes
         self.src_loader = src_loader
@@ -73,7 +75,7 @@ class RMT(TTAMethod):
             with torch.no_grad():
                 for data in tqdm.tqdm(self.src_loader):
                     x, y = data[0], data[1]
-                    tmp_features = self.feature_extractor(x.cuda())
+                    tmp_features = self.feature_extractor(x.to(self.device))
                     features_src = torch.cat([features_src, tmp_features.view(tmp_features.shape[:2]).cpu()], dim=0)
                     labels_src = torch.cat([labels_src, y], dim=0)
                     if len(features_src) > 100000:
@@ -87,8 +89,8 @@ class RMT(TTAMethod):
 
             torch.save(self.prototypes_src, fname)
 
-        self.prototypes_src = self.prototypes_src.cuda().unsqueeze(1)
-        self.prototype_labels_src = torch.arange(start=0, end=self.num_classes, step=1).cuda().long()
+        self.prototypes_src = self.prototypes_src.to(self.device).unsqueeze(1)
+        self.prototype_labels_src = torch.arange(start=0, end=self.num_classes, step=1).to(self.device).long()
 
         # setup projector
         if self.dataset_name == "domainnet126":
@@ -97,7 +99,7 @@ class RMT(TTAMethod):
         else:
             num_channels = self.prototypes_src.shape[-1]
             self.projector = nn.Sequential(nn.Linear(num_channels, self.projection_dim), nn.ReLU(),
-                                           nn.Linear(self.projection_dim, self.projection_dim)).cuda()
+                                           nn.Linear(self.projection_dim, self.projection_dim)).to(self.device)
             self.optimizer.add_param_group({'params': self.projector.parameters(), 'lr': self.optimizer.param_groups[0]["lr"]})
 
         # warm up the mean-teacher framework
@@ -146,7 +148,7 @@ class RMT(TTAMethod):
                 batch = next(self.src_loader_iter)
 
             imgs_src, labels_src = batch[0], batch[1]
-            imgs_src, labels_src = imgs_src.cuda(), labels_src.cuda().long()
+            imgs_src, labels_src = imgs_src.to(self.device), labels_src.to(self.device).long()
 
             # forward the test data and optimize the model
             outputs = self.model(imgs_src)
@@ -168,14 +170,14 @@ class RMT(TTAMethod):
         if labels is not None and mask is not None:
             raise ValueError('Cannot define both `labels` and `mask`')
         elif labels is None and mask is None:
-            mask = torch.eye(batch_size, dtype=torch.float32).cuda()
+            mask = torch.eye(batch_size, dtype=torch.float32).to(self.device)
         elif labels is not None:
             labels = labels.contiguous().view(-1, 1)
             if labels.shape[0] != batch_size:
                 raise ValueError('Num of labels does not match num of features')
-            mask = torch.eq(labels, labels.T).float().cuda()
+            mask = torch.eq(labels, labels.T).float().to(self.device)
         else:
-            mask = mask.float().cuda()
+            mask = mask.float().to(self.device)
 
         contrast_count = features.shape[1]
         contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
@@ -202,7 +204,7 @@ class RMT(TTAMethod):
         logits_mask = torch.scatter(
             torch.ones_like(mask),
             1,
-            torch.arange(batch_size * anchor_count).view(-1, 1).cuda(),
+            torch.arange(batch_size * anchor_count).view(-1, 1).to(self.device),
             0
         )
         mask = mask * logits_mask
@@ -266,9 +268,9 @@ class RMT(TTAMethod):
 
             # train on labeled source data
             imgs_src, labels_src = batch[0], batch[1]
-            features_src = self.feature_extractor(imgs_src.cuda())
+            features_src = self.feature_extractor(imgs_src.to(self.device))
             outputs_src = self.classifier(features_src)
-            loss_ce_src = F.cross_entropy(outputs_src, labels_src.cuda().long())
+            loss_ce_src = F.cross_entropy(outputs_src, labels_src.to(self.device).long())
             loss_ce_src *= self.lambda_ce_src
             loss_ce_src.backward()
 

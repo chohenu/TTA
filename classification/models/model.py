@@ -264,7 +264,7 @@ class TransformerWrapper(torch.nn.Module):
         return x
 
 
-def get_model(cfg, num_classes):
+def get_model(cfg, num_classes, device):
     if cfg.CORRUPTION.DATASET == "domainnet126":
         base_model = ResNetDomainNet126(arch=cfg.MODEL.ARCH, checkpoint_path=cfg.CKPT_PATH, num_classes=num_classes)
     else:
@@ -298,7 +298,7 @@ def get_model(cfg, num_classes):
         elif cfg.CORRUPTION.DATASET == "imagenet_d109":
             base_model = ImageNetXWrapper(base_model, IMAGENET_D109_MASK)
 
-    return base_model.cuda()
+    return base_model.to(device)
 
 
 def split_up_model(model, arch_name, dataset_name):
