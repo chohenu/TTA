@@ -10,7 +10,7 @@ To use the repository, we provide a conda environment.
 Make env
 Make over
 Make build
-Make over
+Make exec
 conda update conda
 conda env create -f environment.yml
 conda activate tta 
