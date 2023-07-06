@@ -24,6 +24,7 @@ from methods.norm import Norm
 from methods.lame import LAME
 from methods.sar import SAR, SAM
 from methods.rotta import RoTTA
+from methods.adacontrast_v2 import AdaContrast_v2
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ def evaluate(description):
 
     logger.info(f"Setting up test-time adaptation method: {cfg.MODEL.ADAPTATION.upper()}")
     if cfg.MODEL.ADAPTATION == "source":  # BN--0
-        model, param_names = setup_source(base_model)
+        model, param_names = setup_source(base_model, device)
     elif cfg.MODEL.ADAPTATION == "norm_test":  # BN--1
         model, param_names = setup_test_norm(base_model)
     elif cfg.MODEL.ADAPTATION == "norm_alpha":  # BN--0.1
@@ -65,7 +66,7 @@ def evaluate(description):
     elif cfg.MODEL.ADAPTATION == "lame":
         model, param_names = setup_lame(base_model)
     elif cfg.MODEL.ADAPTATION == "adacontrast":
-        model, param_names = setup_adacontrast(base_model)
+        model, param_names = setup_adacontrast(base_model, device)
     elif cfg.MODEL.ADAPTATION == "eta":
         model, param_names = setup_eta(base_model, num_classes)
     elif cfg.MODEL.ADAPTATION == "eata":
@@ -78,6 +79,8 @@ def evaluate(description):
         model, param_names = setup_gtta(base_model, num_classes)
     elif cfg.MODEL.ADAPTATION == "rmt":
         model, param_names = setup_rmt(base_model, num_classes, device)
+    elif cfg.MODEL.ADAPTATION == "adacontrast_v2":
+        model, param_names = setup_adacontrast_v2(base_model, device)
     else:
         raise ValueError(f"Adaptation method '{cfg.MODEL.ADAPTATION}' is not supported!")
 
@@ -152,10 +155,10 @@ def evaluate(description):
         eval_domain_dict(domain_dict, domain_seq=cfg.CORRUPTION.TYPE)
 
 
-def setup_source(model):
+def setup_source(model, device):
     """Set up BN--0 which uses the source model without any adaptation."""
     model.eval()
-    return model, None
+    return model.to(device), None
 
 
 def setup_test_norm(model):
@@ -258,7 +261,7 @@ def setup_lame(model):
     return lame_model, None
 
 
-def setup_adacontrast(model):
+def setup_adacontrast(model, device):
     model = AdaContrast.configure_model(model)
     params, param_names = AdaContrast.collect_params(model)
     if cfg.CORRUPTION.DATASET == "domainnet126":
@@ -282,8 +285,38 @@ def setup_adacontrast(model):
                                     dist_type=cfg.ADACONTRAST.DIST_TYPE,
                                     ce_sup_type=cfg.ADACONTRAST.CE_SUP_TYPE,
                                     refine_method=cfg.ADACONTRAST.REFINE_METHOD,
-                                    num_neighbors=cfg.ADACONTRAST.NUM_NEIGHBORS)
+                                    num_neighbors=cfg.ADACONTRAST.NUM_NEIGHBORS,
+                                    device=device)
     return adacontrast_model, param_names
+
+def setup_adacontrast_v2(model, device):
+    model = AdaContrast_v2.configure_model(model)
+    params, param_names = AdaContrast_v2.collect_params(model)
+    if cfg.CORRUPTION.DATASET == "domainnet126":
+        optimizer = setup_adacontrast_optimizer(model)
+    else:
+        optimizer = setup_optimizer(params)
+
+    adacontrast_model = AdaContrast_v2(model, optimizer,
+                                    steps=cfg.OPTIM.STEPS,
+                                    episodic=cfg.MODEL.EPISODIC,
+                                    dataset_name=cfg.CORRUPTION.DATASET,
+                                    arch_name=cfg.MODEL.ARCH,
+                                    queue_size=cfg.ADACONTRAST.QUEUE_SIZE,
+                                    momentum=cfg.M_TEACHER.MOMENTUM,
+                                    temperature=cfg.CONTRAST.TEMPERATURE,
+                                    contrast_type=cfg.ADACONTRAST.CONTRAST_TYPE,
+                                    ce_type=cfg.ADACONTRAST.CE_TYPE,
+                                    alpha=cfg.ADACONTRAST.ALPHA,
+                                    beta=cfg.ADACONTRAST.BETA,
+                                    eta=cfg.ADACONTRAST.ETA,
+                                    dist_type=cfg.ADACONTRAST.DIST_TYPE,
+                                    ce_sup_type=cfg.ADACONTRAST.CE_SUP_TYPE,
+                                    refine_method=cfg.ADACONTRAST.REFINE_METHOD,
+                                    num_neighbors=cfg.ADACONTRAST.NUM_NEIGHBORS,
+                                    device=device)
+    return adacontrast_model, param_names
+
 
 
 def setup_eta(model, num_classes):

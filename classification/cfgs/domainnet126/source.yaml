@@ -11,4 +11,5 @@ MODEL:
   ARCH: resnet50
 TEST:
   BATCH_SIZE: 128
-CKPT_PATH: "./ckpt/domainnet126/best_real_2020.pth"
+CKPT_PATH: /opt/tta/classification/ckpt/domainet126/best_real_2020.pth
+DEVICE: 1

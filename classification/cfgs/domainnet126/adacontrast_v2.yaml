@@ -7,7 +7,7 @@ CORRUPTION:
     - painting
     - sketch
 MODEL:
-  ADAPTATION: adacontrast
+  ADAPTATION: adacontrast_v2
   ARCH: resnet50
 OPTIM:
   METHOD: SGD

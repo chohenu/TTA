@@ -27,7 +27,7 @@ def get_transform(dataset_name, adaptation):
     :param adaptation: Name of the adaptation method
     :return: transforms
     """
-    if adaptation == "adacontrast":
+    if adaptation == "adacontrast" or adaptation == 'adacontrast_v2':
         # adacontrast requires specific transformations
         if dataset_name in {"cifar10", "cifar100", "cifar10_c", "cifar100_c"}:
             transform = get_augmentation_versions(aug_versions="twss", aug_type="moco-v2-light", res_size=32, crop_size=32)
@@ -102,7 +102,7 @@ def get_test_loader(setting, adaptation, dataset_name, root_dir, domain_name, se
             if "mixed_domains" in setting:
                 data_files = [os.path.join("datasets", f"{dataset_name}_lists", dom_name + "_list.txt") for dom_name in domain_names_all]
             else:
-                data_files = [os.path.join("datasets", f"{dataset_name}_lists", domain_name + "_list.txt")]
+                data_files = [os.path.join("/opt/tta/classification/datasets", f"{dataset_name}_lists", domain_name + "_list.txt")]
 
             test_dataset = ImageList(image_root=data_dir,
                                      label_files=data_files,
