@@ -9,3 +9,9 @@ classification/output/
 .vscode/
 .imgs/
 
+thrid_party/Twin-Contrastive-Learning/save
+thrid_party/Twin-Contrastive-Learning/datasets
+
+thrid_party/TCL/dataset
+
+
