@@ -145,7 +145,7 @@ class AdaMoCo(nn.Module):
 		return feats_q, logits_q, logits_ins, k
 
 
-class AdaContrast_v2(TTAMethod):
+class TwinContrast(TTAMethod):
 	def __init__(self, model, optimizer, steps, episodic, dataset_name, arch_name, queue_size, momentum, temperature, contrast_type, ce_type, alpha, beta, eta,
 				 dist_type, ce_sup_type, refine_method, num_neighbors, device):
 		super().__init__(model.to(device), optimizer, steps, episodic, device)

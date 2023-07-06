@@ -24,7 +24,7 @@ from methods.norm import Norm
 from methods.lame import LAME
 from methods.sar import SAR, SAM
 from methods.rotta import RoTTA
-from methods.adacontrast_v2 import AdaContrast_v2
+from methods.twincontrast import TwinContrast
 
 
 logger = logging.getLogger(__name__)
@@ -79,8 +79,8 @@ def evaluate(description):
         model, param_names = setup_gtta(base_model, num_classes)
     elif cfg.MODEL.ADAPTATION == "rmt":
         model, param_names = setup_rmt(base_model, num_classes, device)
-    elif cfg.MODEL.ADAPTATION == "adacontrast_v2":
-        model, param_names = setup_adacontrast_v2(base_model, device)
+    elif cfg.MODEL.ADAPTATION == "twincontrast":
+        model, param_names = setup_twincontrast(base_model, device)
     else:
         raise ValueError(f"Adaptation method '{cfg.MODEL.ADAPTATION}' is not supported!")
 
@@ -289,15 +289,15 @@ def setup_adacontrast(model, device):
                                     device=device)
     return adacontrast_model, param_names
 
-def setup_adacontrast_v2(model, device):
-    model = AdaContrast_v2.configure_model(model)
-    params, param_names = AdaContrast_v2.collect_params(model)
+def setup_twincontrast(model, device):
+    model = TwinContrast.configure_model(model)
+    params, param_names = TwinContrast.collect_params(model)
     if cfg.CORRUPTION.DATASET == "domainnet126":
         optimizer = setup_adacontrast_optimizer(model)
     else:
         optimizer = setup_optimizer(params)
 
-    adacontrast_model = AdaContrast_v2(model, optimizer,
+    adacontrast_model = TwinContrast(model, optimizer,
                                     steps=cfg.OPTIM.STEPS,
                                     episodic=cfg.MODEL.EPISODIC,
                                     dataset_name=cfg.CORRUPTION.DATASET,
