@@ -7,7 +7,7 @@ CORRUPTION:
     - painting
     - sketch
 MODEL:
-  ADAPTATION: adacontrast_v2
+  ADAPTATION: twincontrast
   ARCH: resnet50
 OPTIM:
   METHOD: SGD
@@ -21,4 +21,4 @@ CONTRAST:
 TEST:
   BATCH_SIZE: 128
 CKPT_PATH: /opt/tta/classification/ckpt/domainet126/best_real_2020.pth
-DEVICE: 0
+DEVICE: 4
