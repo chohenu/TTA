@@ -38,35 +38,19 @@ class ClusterLoss(nn.Module):
         assert n % self.multiplier == 0
 
         # c = c / np.sqrt(self.tau)
+        c_list = [x for x in c.chunk(self.multiplier)]
+        c_aug0 = c_list[0]
+        c_aug1 = c_list[1]
+        p_i = c_aug0.sum(0).view(-1)
+        p_i /= p_i.sum()
+        en_i = np.log(p_i.size(0)) + (p_i * torch.log(p_i)).sum()
+        p_j = c_aug1.sum(0).view(-1)
+        p_j /= p_j.sum()
+        en_j = np.log(p_j.size(0)) + (p_j * torch.log(p_j)).sum()
+        en_loss = en_i + en_j
 
-        if self.distributed:
-            c_list = [torch.zeros_like(c) for _ in range(dist.get_world_size())]
-            # all_gather fills the list as [<proc0>, <proc1>, ...]
-            c_list = diffdist.functional.all_gather(c_list, c)
-            # split it into [<proc0_aug0>, <proc0_aug1>, ..., <proc0_aug(m-1)>, <proc1_aug(m-1)>, ...]
-            c_list = [chunk for x in c_list for chunk in x.chunk(self.multiplier)]
-            # sort it to [<proc0_aug0>, <proc1_aug0>, ...] that simply means [<batch_aug0>, <batch_aug1>, ...] as expected below
-            c_sorted = []
-            for m in range(self.multiplier):
-                for i in range(dist.get_world_size()):
-                    c_sorted.append(c_list[i * self.multiplier + m])
-            c_aug0 = torch.cat(
-                c_sorted[: int(self.multiplier * dist.get_world_size() / 2)], dim=0
-            )
-            c_aug1 = torch.cat(
-                c_sorted[int(self.multiplier * dist.get_world_size() / 2) :], dim=0
-            )
-
-            p_i = c_aug0.sum(0).view(-1)
-            p_i /= p_i.sum()
-            en_i = np.log(p_i.size(0)) + (p_i * torch.log(p_i)).sum()
-            p_j = c_aug1.sum(0).view(-1)
-            p_j /= p_j.sum()
-            en_j = np.log(p_j.size(0)) + (p_j * torch.log(p_j)).sum()
-            en_loss = en_i + en_j
-
-            c = torch.cat((c_aug0.t(), c_aug1.t()), dim=0)
-            n = c.shape[0]
+        c = torch.cat((c_aug0.t(), c_aug1.t()), dim=0)
+        n = c.shape[0]
 
         c = F.normalize(c, p=2, dim=1) / np.sqrt(self.tau)
 
