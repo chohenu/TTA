@@ -27,11 +27,10 @@ class ClusterLoss(nn.Module):
 
     LARGE_NUMBER = 1e4
 
-    def __init__(self, tau=1.0, multiplier=2, distributed=False):
+    def __init__(self, tau=1.0, multiplier=2):
         super().__init__()
         self.tau = tau
         self.multiplier = multiplier
-        self.distributed = distributed
 
     def forward(self, c, get_map=False):
         n = c.shape[0]
