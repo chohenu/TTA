@@ -62,6 +62,8 @@ _C.DESC = ""
 # _C.CFG_DEST = "cfg.yaml"
 
 _C.DEVICE = 1
+
+_C.USE_MEMORY_CLUSTER = False
 # ----------------------------- Model options ------------------------------- #
 _C.MODEL = CfgNode()
 

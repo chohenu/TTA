@@ -314,6 +314,7 @@ def setup_twincontrast(model, device):
                                     ce_sup_type=cfg.ADACONTRAST.CE_SUP_TYPE,
                                     refine_method=cfg.ADACONTRAST.REFINE_METHOD,
                                     num_neighbors=cfg.ADACONTRAST.NUM_NEIGHBORS,
+                                    use_memory_cluster=cfg.USE_MEMORY_CLUSTER,
                                     device=device)
     return adacontrast_model, param_names
 

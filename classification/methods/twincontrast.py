@@ -200,7 +200,7 @@ class AdaMoCo(nn.Module):
 
 class TwinContrast(TTAMethod):
     def __init__(self, model, optimizer, steps, episodic, dataset_name, arch_name, queue_size, momentum, temperature, contrast_type, ce_type, alpha, beta, eta,
-                 dist_type, ce_sup_type, refine_method, num_neighbors, device):
+                 dist_type, ce_sup_type, refine_method, num_neighbors, use_memory_cluster, device):
         super().__init__(model.to(device), optimizer, steps, episodic, device)
 
         self.device = device
@@ -254,7 +254,9 @@ class TwinContrast(TTAMethod):
         self.model_states, self.optimizer_state = \
             self.copy_model_and_optimizer()
    
-        self.cluster_loss = ClusterLoss(distributed=True)
+        self.cluster_loss = ClusterLoss()
+        
+        self.use_memory_cluster = use_memory_cluster
 
     def forward(self, x):
         images_test, images_w, images_q, images_k = x
@@ -307,8 +309,20 @@ class TwinContrast(TTAMethod):
             contrast_type=self.contrast_type,
             device=self.device,
         )
-
-        logits_cluster = torch.cat([F.softmax(logits_q, dim=1), F.softmax(logits_k, dim=1)], dim=0)
+        if self.use_memory_cluster:
+            bs = len(logits_q)
+            ms = self.model.mem_feat.size(1)
+            k = ms // bs
+            feats_m = self.model.mem_feat[:, :bs*k].permute(1, 0)
+            logtis_m = self.model.src_model.fc(feats_m)
+            
+            #repeat logit q
+            logits_q_  = logits_q[None, :, :].repeat(k, 1, 1).flatten(0, 1)
+            
+            logits_cluster = torch.cat([F.softmax(logits_q_, dim=1), F.softmax(logtis_m, dim=1)], dim=0)
+            
+        else:
+            logits_cluster = torch.cat([F.softmax(logits_q, dim=1), F.softmax(logits_k, dim=1)], dim=0)
         loss_cluster = self.cluster_loss(logits_cluster)
 
         # classification
