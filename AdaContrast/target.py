@@ -31,7 +31,7 @@ from utils import (
 )
 
 from losses import ClusterLoss
-
+from clustering import GaussianMixture
 
 @torch.no_grad()
 def eval_and_label_dataset(dataloader, model, banks, args):
@@ -138,6 +138,19 @@ def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
 
 
 @torch.no_grad()
+def GMM_clustering(features, features_bank, probs_bank, args):
+    n_features = features.size(1)
+    n_components = 126
+    
+    model = GaussianMixture(n_components, n_features, covariance_type='full').to(device)
+    model.fit(features_bank)
+    
+    y_p = model.predict(features, probs=True)
+    
+    return y_p
+    
+
+@torch.no_grad()
 def update_labels(banks, idxs, features, logits, args):
     # 1) avoid inconsistency among DDP processes, and
     # 2) have better estimate with more data points
@@ -169,6 +182,13 @@ def refine_predictions(
         probs_bank = banks["probs"]
         pred_labels, probs = soft_k_nearest_neighbors(
             features, feature_bank, probs_bank, args
+        )
+    elif args.learn.refine_method == "GMM":
+        feature_bank = banks["features"]
+        probs_bank = banks["probs"]
+        pred_labes, probs = GMM_clustering(
+            features, feature_bank, probs_bank, 
+            args
         )
     elif args.learn.refine_method is None:
         pred_labels = probs.argmax(dim=1)
@@ -376,9 +396,9 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
 
 
         # add cluster contrastive los s
-        if args.loss.add_cluster_loss:
+        if args.learn.add_cluster_loss:
             clusterloss = cluster_loss()
-            if args.loss.use_momory_bank: 
+            if args.learn.use_momory_bank: 
                 bs = len(logits_q)
                 ms = model.mem_feat.size(1)
                 k = ms // bs
@@ -420,7 +440,7 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
             args.learn.alpha * loss_cls
             + args.learn.beta * loss_ins
             + args.learn.eta * loss_div
-            + loss_cluster if args.loss.add_cluster_loss else 0 
+            + loss_cluster if args.learn.add_cluster_loss else 0 
         )
         loss_meter.update(loss.item())
 
