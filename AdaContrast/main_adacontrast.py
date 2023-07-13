@@ -20,7 +20,6 @@ from source import train_source_domain
 from target import train_target_domain as train_target_adacontrast
 from utils import configure_logger, NUM_CLASSES, use_wandb
 
-
 @hydra.main(config_path="configs", config_name="root")
 def main(args):
     # enable adding attributes at runtime

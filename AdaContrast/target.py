@@ -30,6 +30,8 @@ from utils import (
     ProgressMeter,
 )
 
+from losses import ClusterLoss
+
 
 @torch.no_grad()
 def eval_and_label_dataset(dataloader, model, banks, args):
@@ -368,9 +370,28 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
                 feats_w, probs_w, banks, args=args
             )
 
-        _, logits_q, logits_ins, keys = model(images_q, images_k)
+        _, logits_q, logits_ins, keys, logits_k = model(images_q, images_k)
         # update key features and corresponding pseudo labels
         model.update_memory(keys, pseudo_labels_w)
+
+
+        # add cluster contrastive los s
+        if args.loss.add_cluster_loss:
+            clusterloss = cluster_loss()
+            if args.loss.use_momory_bank: 
+                bs = len(logits_q)
+                ms = model.mem_feat.size(1)
+                k = ms // bs
+                feats_m = model.mem_feat[:, :bs*k].permute(1, 0)
+                logtis_m = model.src_model.fc(feats_m)
+                
+                #repeat logit q
+                logits_q_  = logits_q[None, :, :].repeat(k, 1, 1).flatten(0, 1)
+                
+                logits_cluster = torch.cat([F.softmax(logits_q_, dim=1), F.softmax(logtis_m, dim=1)], dim=0)
+            else: 
+                logits_cluster = torch.cat([F.softmax(logits_q, dim=1), F.softmax(logits_k, dim=1)], dim=0)
+            loss_cluster = clusterloss(logits_cluster)
 
         # moco instance discrimination
         loss_ins, accuracy_ins = instance_loss(
@@ -399,6 +420,7 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
             args.learn.alpha * loss_cls
             + args.learn.beta * loss_ins
             + args.learn.eta * loss_div
+            + loss_cluster if args.loss.add_cluster_loss else 0 
         )
         loss_meter.update(loss.item())
 
@@ -435,6 +457,8 @@ def calculate_acc(logits, labels):
     accuracy = (preds == labels).float().mean() * 100
     return accuracy
 
+def cluster_loss(): 
+    return ClusterLoss()
 
 def instance_loss(logits_ins, pseudo_labels, mem_labels, contrast_type):
     # labels: positive key indicators

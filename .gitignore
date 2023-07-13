@@ -13,4 +13,9 @@ thrid_party/Twin-Contrastive-Learning/datasets
 
 thrid_party/TCL/dataset
 
+AdaContrast/checkpoint
+AdaContrast/output
+AdaContrast/datasets
+
+
 

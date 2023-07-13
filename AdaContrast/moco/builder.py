@@ -170,7 +170,7 @@ class AdaMoCo(nn.Module):
             # shuffle for making use of BN
             im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
 
-            k, _ = self.momentum_model(im_k, return_feats=True)
+            k, logits_k = self.momentum_model(im_k, return_feats=True)
             k = F.normalize(k, dim=1)
 
             # undo shuffle
@@ -190,4 +190,4 @@ class AdaMoCo(nn.Module):
         logits_ins /= self.T_moco
 
         # dequeue and enqueue will happen outside
-        return feats_q, logits_q, logits_ins, k
+        return feats_q, logits_q, logits_ins, k, logits_k
