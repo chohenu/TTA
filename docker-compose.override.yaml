@@ -1,7 +1,7 @@
 services:
   tta:
     volumes:
-      - /home/hyeonwoocho:/mnt/home
+      - /nvme1/TTA:/mnt/data
 
       - type: bind
         source: /team/team_blu3/lung
