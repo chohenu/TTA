@@ -31,7 +31,15 @@ from utils import (
 )
 
 from losses import ClusterLoss
-from clustering import GaussianMixture
+
+# TODO : install PyTorchGaussianMixture
+# try: 
+#     from torch_clustering import PyTorchGaussianMixture
+# except: 
+#     !pip install -e /opt/tta/AdaContrast/clustering/torch_clustering/
+#     from torch_clustering import PyTorchGaussianMixture
+
+from sklearn.mixture import GaussianMixture  ## numpy version
 
 @torch.no_grad()
 def eval_and_label_dataset(dataloader, model, banks, args):
@@ -139,15 +147,12 @@ def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
 
 @torch.no_grad()
 def GMM_clustering(features, features_bank, probs_bank, args):
+    array_feature_bank = features_bank.cpu().numpy()
     n_features = features.size(1)
-    n_components = 126
-    
-    model = GaussianMixture(n_components, n_features, covariance_type='full').to(device)
-    model.fit(features_bank)
-    
-    y_p = model.predict(features, probs=True)
-    
-    return y_p
+    n_components = 2
+    logging.info(f"Making Gaussian mixture model")
+    model = GaussianMixture(n_components=n_components, random_state=0).fit(array_feature_bank)
+    return model
     
 
 @torch.no_grad()
@@ -186,10 +191,14 @@ def refine_predictions(
     elif args.learn.refine_method == "GMM":
         feature_bank = banks["features"]
         probs_bank = banks["probs"]
-        pred_labes, probs = GMM_clustering(
+        ## TODO : Calculate distance using GMM model 
+        ## using Attributes function (ex, predict(features) or predict_proba(features)  
+        ## Link : https://scikit-learn.org/stable/modules/generated/sklearn.mixture.GaussianMixture.html
+        gm = GMM_clustering(
             features, feature_bank, probs_bank, 
             args
         )
+        breakpoint()
     elif args.learn.refine_method is None:
         pred_labels = probs.argmax(dim=1)
     else:
