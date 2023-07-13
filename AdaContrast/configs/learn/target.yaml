@@ -9,6 +9,8 @@ ce_type: "standard" # ["standard", "symmetric", "smoothed", "soft"]
 alpha: 1.0
 beta: 1.0
 eta: 1.0
+add_cluster_loss : True
+use_momory_bank : False
 
 # algo-related stuff
 aug_versions: "wss" # ["w", "ws", "wss", "ss"]
