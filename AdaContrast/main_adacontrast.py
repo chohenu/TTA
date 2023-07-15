@@ -25,6 +25,9 @@ def main(args):
     # enable adding attributes at runtime
     OmegaConf.set_struct(args, False)
     args.job_name = HydraConfig.get().job.name
+    if args.memo == "debug":
+        args.data.source_domains = [args.data.source_domains]
+        args.data.target_domains = [args.data.target_domains]
 
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
