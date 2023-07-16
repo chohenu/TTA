@@ -5,7 +5,7 @@ import torchvision.models as models
 
 
 class Classifier(nn.Module):
-    def __init__(self, args, checkpoint_path=None):
+    def __init__(self, args, train_target=False, checkpoint_path=None):
         super().__init__()
         self.args = args
         model = None
@@ -31,6 +31,16 @@ class Classifier(nn.Module):
 
         if checkpoint_path:
             self.load_from_checkpoint(checkpoint_path)
+        
+        # if train_target:
+        #     self.projector_q = nn.Sequential(nn.Linear(self._output_dim, self._output_dim),
+        #                                     nn.BatchNorm1d(self._output_dim),
+        #                                     nn.ReLU(inplace=True),
+        #                                     nn.Linear(self._output_dim, 128),
+        #                                     nn.BatchNorm1d(128),
+        #                                     )
+        #     self.cluster
+    
 
     def forward(self, x, return_feats=False):
         # 1) encoder feature

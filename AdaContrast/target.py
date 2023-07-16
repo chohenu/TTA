@@ -147,12 +147,15 @@ def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
 
 @torch.no_grad()
 def GMM_clustering(features, features_bank, probs_bank, args):
+    
     array_feature_bank = features_bank.cpu().numpy()
     n_features = features.size(1)
-    n_components = 2
+    n_components = probs_bank.size(1)
     logging.info(f"Making Gaussian mixture model")
-    model = GaussianMixture(n_components=n_components, random_state=0).fit(array_feature_bank)
-    return model
+    model = GaussianMixture(n_components=n_components, covariance_type="diag", random_state=0)
+    model.fit(array_feature_bank)
+    y_p = model.predict_proba(array_feature_bank)
+    return y_p
     
 
 @torch.no_grad()
@@ -198,7 +201,6 @@ def refine_predictions(
             features, feature_bank, probs_bank, 
             args
         )
-        breakpoint()
     elif args.learn.refine_method is None:
         pred_labels = probs.argmax(dim=1)
     else:
@@ -287,8 +289,9 @@ def train_target_domain(args):
         args.model_tta.src_log_dir,
         f"best_{args.data.src_domain}_{args.seed}.pth.tar",
     )
-    src_model = Classifier(args.model_src, checkpoint_path)
-    momentum_model = Classifier(args.model_src, checkpoint_path)
+    train_target = (args.data.src_domain != args.data.tar_domain).bool()
+    src_model = Classifier(args, train_target, checkpoint_path)
+    momentum_model = Classifier(args, checkpoint_path)
     model = AdaMoCo(
         src_model,
         momentum_model,
