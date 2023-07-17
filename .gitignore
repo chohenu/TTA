@@ -5,6 +5,11 @@ segmentation/datasets/
 classification/ckpt/*
 classification/output/
 
+ckpt/
+output/
+datasets/
+*png
+
 .vscode/
 .imgs/
 
@@ -17,5 +22,6 @@ AdaContrast/checkpoint
 AdaContrast/output
 AdaContrast/datasets
 
-
-
+classification/.ipynb_checkpoints/
+classification/models/.ipynb_checkpoints/
+classification/*.ipynb

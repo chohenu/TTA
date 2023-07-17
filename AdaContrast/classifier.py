@@ -12,43 +12,50 @@ class Classifier(nn.Module):
 
         # 1) ResNet backbone (up to penultimate layer)
         if not self.use_bottleneck:
-            model = models.__dict__[args.arch](pretrained=True)
+            model = models.__dict__[args.model_src.arch](pretrained=True)
             modules = list(model.children())[:-1]
             self.encoder = nn.Sequential(*modules)
             self._output_dim = model.fc.in_features
         # 2) ResNet backbone + bottlenck (last fc as bottleneck)
         else:
-            model = models.__dict__[args.arch](pretrained=True)
-            model.fc = nn.Linear(model.fc.in_features, args.bottleneck_dim)
-            bn = nn.BatchNorm1d(args.bottleneck_dim)
+            model = models.__dict__[args.model_src.arch](pretrained=True)
+            model.fc = nn.Linear(model.fc.in_features, args.model_src.bottleneck_dim)
+            bn = nn.BatchNorm1d(args.model_src.bottleneck_dim)
             self.encoder = nn.Sequential(model, bn)
-            self._output_dim = args.bottleneck_dim
+            self._output_dim = args.model_src.bottleneck_dim
 
-        self.fc = nn.Linear(self.output_dim, args.num_classes)
-
+        self.fc = nn.Linear(self.output_dim, args.model_src.num_classes)
+        
         if self.use_weight_norm:
-            self.fc = nn.utils.weight_norm(self.fc, dim=args.weight_norm_dim)
+            self.fc = nn.utils.weight_norm(self.fc, dim=args.model_src.weight_norm_dim)
 
         if checkpoint_path:
             self.load_from_checkpoint(checkpoint_path)
         
-        # if train_target:
-        #     self.projector_q = nn.Sequential(nn.Linear(self._output_dim, self._output_dim),
-        #                                     nn.BatchNorm1d(self._output_dim),
-        #                                     nn.ReLU(inplace=True),
-        #                                     nn.Linear(self._output_dim, 128),
-        #                                     nn.BatchNorm1d(128),
-        #                                     )
-        #     self.cluster
+        if train_target and args.learn.do_noise_detect:
+            # self.projector_q = nn.Sequential(nn.Linear(self._output_dim, self._output_dim),
+            #                                 nn.BatchNorm1d(self._output_dim),
+            #                                 nn.ReLU(inplace=True),
+            #                                 nn.Linear(self._output_dim, int(self._output_dim/2)),
+            #                                 nn.BatchNorm1d(int(self._output_dim/2)),
+            #                                 )
+            self.classifier_q = self.fc
     
 
     def forward(self, x, return_feats=False):
         # 1) encoder feature
         feat = self.encoder(x)
         feat = torch.flatten(feat, 1)
-
+        
+        # if self.args.learn.refine_method == 'detect_noisy':
+        #     project_feat = self.projector_q(feat)
+        #     cluster_label = self.classifier_q(feat)
+        # else: 
+        #     project_feat = None
+        #     cluster_label = None
+            
         logits = self.fc(feat)
-
+        
         if return_feats:
             return feat, logits
         return logits
@@ -100,8 +107,8 @@ class Classifier(nn.Module):
 
     @property
     def use_bottleneck(self):
-        return self.args.bottleneck_dim > 0
+        return self.args.model_src.bottleneck_dim > 0
 
     @property
     def use_weight_norm(self):
-        return self.args.weight_norm_dim >= 0
+        return self.args.model_src.weight_norm_dim >= 0

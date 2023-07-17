@@ -63,7 +63,7 @@ def get_source_optimizer(model, args):
 
 def train_source_domain(args):
     logging.info(f"Start source training on {args.data.src_domain}...")
-    train_target = (args.data.src_domain != args.data.tar_domain).bool()
+    train_target = (args.data.src_domain != args.data.tgt_domain).bool()
     model = Classifier(args.model_src, train_target).to("cuda")
     if args.distributed:
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
