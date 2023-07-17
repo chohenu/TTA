@@ -16,7 +16,7 @@ from utils import TwoCropTransform, extract_features
 from utils.ops import convert_to_cuda, is_root_worker, dataset_with_indices
 from utils.grad_scaler import NativeScalerWithGradNormCount
 from utils.loggerx import LoggerX
-import torch_clustering
+# import torch_clustering
 
 
 class TrainTask(object):
@@ -193,7 +193,7 @@ class TrainTask(object):
 
         if opt.whole_dataset and has_subfolder:
             ano_dataset = self.create_dataset(data_root, dataset_name, not train, transform=transform,
-                                              memory=memory)[0]
+                                              memory=memory, download=True)[0]
             labels = np.concatenate([labels, ano_dataset.targets], axis=0)
             dataset = torch.utils.data.ConcatDataset([dataset, ano_dataset])
 

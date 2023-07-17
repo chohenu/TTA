@@ -5,18 +5,24 @@ print_freq: 10
 
 # loss
 contrast_type: "class_aware"
-ce_type: "standard" # ["standard", "symmetric", "smoothed", "soft"]
+ce_type: "reduction_none" # ["standard", "reduction_none"]
 alpha: 1.0
 beta: 1.0
 eta: 1.0
-add_cluster_loss : True
+add_cluster_loss : False
 use_momory_bank : False
 
 # algo-related stuff
 aug_versions: "wss" # ["w", "ws", "wss", "ss"]
 dist_type: "cosine" # ["cosine", "euclidean"]
 ce_sup_type: "weak_strong" # ["weak_all", "weak_weak", "weak_strong", "self_all"]
-refine_method: "GMM"
+refine_method: "nearest_neighbors"
 num_neighbors: 10
 queue_size: -1
 epoch_labeling: false
+
+# For Noisy Detector
+do_noise_detect: True
+use_projector_q: False
+use_classfier_q: False
+sep_gmm: False
