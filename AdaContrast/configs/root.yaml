@@ -5,7 +5,7 @@ rank: 0
 port: 10000
 dist_url: "tcp://localhost:${port}"
 dist_backend: "nccl"
-multiprocessing_distributed: false
+multiprocessing_distributed: True
 seed: null
 
 # Pipeline flag & memo
@@ -15,7 +15,7 @@ workdir: ./output
 memo: test
 sub_memo: null
 project: null
-use_wandb: False
+use_wandb: True
 
 # Modular settings
 defaults:

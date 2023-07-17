@@ -1,13 +1,13 @@
 batch_size: 256
 num_devices: 4
 
-wandb: true
+wandb: false
 project_name: noise_label
 entity: zzhuang
 
 dataset: cifar10
 resized_crop_scale: 0.2
-label_file: models/tcl/data/sym_noise_cifar10_90.npy
+label_file: /opt/tta/thrid_party/TCL/models/tcl/data/sym_noise_cifar10_90.npy
 encoder_name: bigresnet18_preact
 epochs: 200
 feat_dim: 256
