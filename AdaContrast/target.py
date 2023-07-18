@@ -123,13 +123,21 @@ def eval_and_label_dataset(dataloader, model, banks, args):
             "Do Noise Detection"
         )
         noise_labels = pred_labels
+        is_clean = gt_labels.cpu().numpy() == noise_labels.cpu().numpy()
+        clean_ratio = np.average(is_clean)
+        
         confidence, context_assignments, centers = noise_detect(cluster_labels, noise_labels, 
                                                                 features, args)
+        estimated_noise_ratio = (confidence > 0.5).float().mean().item()
         noise_accuracy = ((confidence > 0.5) == (gt_labels == noise_labels)).float().mean()
-        logging.info(
-            f"noise_accuracy: {noise_accuracy}"
-        )
-    
+        from sklearn.metrics import roc_auc_score
+        context_noise_auc = roc_auc_score(is_clean, confidence.cpu().numpy())
+        logging.info(f"noise_accuracy: {noise_accuracy}")
+        logging.info(f"noise_ratio: {1-clean_ratio}")
+        logging.info(f"roc_auc_score: {context_noise_auc}")
+    banks["confidence"] = confidence[rand_idxs][: args.learn.queue_size]
+    banks["context_assignments"] = context_assignments[rand_idxs][: args.learn.queue_size]
+    banks["centers"] = centers
     pred_labels, _, acc  = refine_predictions(
         features, probs, banks, args=args, gt_labels=gt_labels
     )
@@ -155,14 +163,17 @@ def eval_and_label_dataset(dataloader, model, banks, args):
 
 
 @torch.no_grad()
-def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
+def soft_k_nearest_neighbors(features, features_bank, probs_bank, confidence_bank,
+                            context_assignments_bank, centers_bank,args):
     pred_probs = []
     for feats in features.split(64):
         distances = get_distances(feats, features_bank, args.learn.dist_type)
         _, idxs = distances.sort()
         idxs = idxs[:, : args.learn.num_neighbors]
         # (64, num_nbrs, num_classes), average over dim=1
-        probs = probs_bank[idxs, :].mean(1)
+        probs = probs_bank[idxs, :]
+        confidences = confidence_bank[idxs].unsqueeze(2).repeat(1,1,probs.size(2))
+        probs = (confidences * probs).mean(1)
         pred_probs.append(probs)
     pred_probs = torch.cat(pred_probs)
     _, pred_labels = pred_probs.max(dim=1)
@@ -195,7 +206,7 @@ def noise_detect(cluster_labels, labels, features, args, temp=0.25):
     from sklearn.mixture import GaussianMixture
     confidence = np.zeros((losses.shape[0],))
     if args.learn.sep_gmm:
-        for i in range(args.num_classes):
+        for i in range(cluster_labels.size(1)):
             mask = labels == i
             c = losses[mask, :]
             gm = GaussianMixture(n_components=2, random_state=2).fit(c)
@@ -239,8 +250,13 @@ def refine_predictions(
     if args.learn.refine_method == "nearest_neighbors":
         feature_bank = banks["features"]
         probs_bank = banks["probs"]
+        confidence_bank = banks["confidence"]
+        context_assignments_bank = banks["context_assignments"]
+        centers_bank = banks["centers"]
+        
         pred_labels, probs = soft_k_nearest_neighbors(
-            features, feature_bank, probs_bank, args
+            features, feature_bank, probs_bank, confidence_bank,
+            context_assignments_bank, centers_bank, args
         )
     elif args.learn.refine_method == "GMM":
         feature_bank = banks["features"]
@@ -466,9 +482,12 @@ def train_epoch_twin(train_loader, model, banks, confidence,
         feats_q, logits_q, logits_ins, feats_k, logits_k = model(images_q, images_k)
         
         
-        # Calculate reliable degree of pseudo labels 
-        with torch.no_grad():
-            CE_weight = calculate_reliability(centers, clear_confidence, feats_w, feats_q, feats_k)
+        # Calculate reliable degree of pseudo labels
+        if args.learn.use_ce_weight:
+            with torch.no_grad():
+                CE_weight = calculate_reliability(centers, clear_confidence, feats_w, feats_q, feats_k)
+        else:
+            CE_weight = 1.
         
         # update key features and corresponding pseudo labels
         model.update_memory(feats_k, pseudo_labels_w)
@@ -694,9 +713,7 @@ def instance_loss(logits_ins, pseudo_labels, mem_labels, contrast_type):
 
 
 def classification_loss(logits_w, logits_s, target_labels, CE_weight, args):
-    if not args.learn.do_noise_detect:
-        CE_weight = 1.
-    elif args.learn.ce_sup_type == "weak_weak":
+    if args.learn.ce_sup_type == "weak_weak":
         loss_cls = (CE_weight * cross_entropy_loss(logits_w, target_labels, args)).mean()
         accuracy = calculate_acc(logits_w, target_labels)
     elif args.learn.ce_sup_type == "weak_strong":

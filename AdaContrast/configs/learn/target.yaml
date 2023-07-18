@@ -23,6 +23,7 @@ epoch_labeling: false
 
 # For Noisy Detector
 do_noise_detect: True
+use_ce_weight: False
 use_projector_q: False
 use_classfier_q: False
-sep_gmm: False
+sep_gmm: True
