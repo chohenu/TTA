@@ -128,7 +128,7 @@ def eval_and_label_dataset(dataloader, model, banks, args):
         
         confidence, context_assignments, centers = noise_detect(cluster_labels, noise_labels, 
                                                                 features, args)
-        estimated_noise_ratio = (confidence > 0.5).float().mean().item()
+        estimated_clean_ratio = (confidence > 0.5).float().mean().item()
         noise_accuracy = ((confidence > 0.5) == (gt_labels == noise_labels)).float().mean()
         from sklearn.metrics import roc_auc_score
         context_noise_auc = roc_auc_score(is_clean, confidence.cpu().numpy())
@@ -159,19 +159,51 @@ def eval_and_label_dataset(dataloader, model, banks, args):
     if use_wandb(args):
         wandb.log(wandb_dict)
 
-    return pseudo_item_list, banks, confidence, context_assignments, centers
+    return pseudo_item_list, banks, confidence, context_assignments, centers, estimated_clean_ratio
 
 
 @torch.no_grad()
 def soft_k_nearest_neighbors(features, features_bank, probs_bank, confidence_bank,
-                            context_assignments_bank, centers_bank,args):
+                            context_assignments_bank, centers_bank, gt_labels, args):
+    pred_probs = []
+    if args.learn.refine_method == "conf_based_nearest_neighbors":
+        for feats in features.split(64):
+            distances = get_distances(feats, features_bank, args.learn.dist_type)
+            _, idxs = distances.sort()
+            idxs = idxs[:, : args.learn.num_neighbors]
+            # (64, num_nbrs, num_classes), average over dim=1
+            probs = probs_bank[idxs, :]
+            confidences = confidence_bank[idxs].unsqueeze(2).repeat(1,1,probs.size(2))
+            probs = (confidences * probs).mean(1)
+            pred_probs.append(probs)
+        pred_probs = torch.cat(pred_probs)
+        _, pred_labels = pred_probs.max(dim=1)
+        
+        return pred_labels, pred_probs
+    
+    else:
+        for feats in features.split(64):
+            distances = get_distances(feats, features_bank, args.learn.dist_type)
+            _, idxs = distances.sort()
+            idxs = idxs[:, : args.learn.num_neighbors]
+            # (64, num_nbrs, num_classes), average over dim=1
+            probs = probs_bank[idxs, :].mean(1)
+            pred_probs.append(probs)
+        pred_probs = torch.cat(pred_probs)
+        _, pred_labels = pred_probs.max(dim=1)
+
+        return pred_labels, pred_probs
+
+@torch.no_grad()
+def soft_k_nearest_neighbors_based_conf(features, features_bank, probs_bank, confidence_bank,
+                                        context_assignments_bank, centers_bank,args):
     pred_probs = []
     for feats in features.split(64):
         distances = get_distances(feats, features_bank, args.learn.dist_type)
         _, idxs = distances.sort()
         idxs = idxs[:, : args.learn.num_neighbors]
         # (64, num_nbrs, num_classes), average over dim=1
-        probs = probs_bank[idxs, :]
+        probs = probs_bank[idxs, :].mean(1)
         confidences = confidence_bank[idxs].unsqueeze(2).repeat(1,1,probs.size(2))
         probs = (confidences * probs).mean(1)
         pred_probs.append(probs)
@@ -180,6 +212,21 @@ def soft_k_nearest_neighbors(features, features_bank, probs_bank, confidence_ban
 
     return pred_labels, pred_probs
 
+@torch.no_grad()
+def soft_k_nearest_neighbors_based_context(features, features_bank, probs_bank, confidence_bank,
+                                            context_assignments_bank, centers_bank,args):
+    pred_probs = []
+    for feats in features.split(64):
+        distances = get_distances(feats, features_bank, args.learn.dist_type)
+        _, idxs = distances.sort()
+        idxs = idxs[:, : args.learn.num_neighbors]
+        # (64, num_nbrs, num_classes), average over dim=1
+        probs = probs_bank[idxs, :].mean(1)
+        pred_probs.append(probs)
+    pred_probs = torch.cat(pred_probs)
+    _, pred_labels = pred_probs.max(dim=1)
+
+    return pred_labels, pred_probs
 
 @torch.no_grad()
 def GMM_clustering(features, features_bank, probs_bank, args):
@@ -192,6 +239,22 @@ def GMM_clustering(features, features_bank, probs_bank, args):
     model.fit(array_feature_bank)
     y_p = model.predict_proba(array_feature_bank)
     return y_p
+
+@torch.no_grad()
+def center_nearest_neighbors(features, features_bank, probs_bank, confidence_bank,
+                            context_assignments_bank, centers_bank,args):
+    pred_probs = []
+    for feats in features.split(64):
+        distances = get_distances(feats, features_bank, args.learn.dist_type)
+        _, idxs = distances.sort()
+        idxs = idxs[:, : args.learn.num_neighbors]
+        # (64, num_nbrs, num_classes), average over dim=1
+        probs = probs_bank[idxs, :].mean(1)
+        pred_probs.append(probs)
+    pred_probs = torch.cat(pred_probs)
+    _, pred_labels = pred_probs.max(dim=1)
+
+    return pred_labels, pred_probs
 
 def noise_detect(cluster_labels, labels, features, args, temp=0.25):
     labels = labels.long()
@@ -247,7 +310,7 @@ def refine_predictions(
     args,
     gt_labels=None,
 ):
-    if args.learn.refine_method == "nearest_neighbors":
+    if "nearest_neighbors" in args.learn.refine_method:
         feature_bank = banks["features"]
         probs_bank = banks["probs"]
         confidence_bank = banks["confidence"]
@@ -256,7 +319,7 @@ def refine_predictions(
         
         pred_labels, probs = soft_k_nearest_neighbors(
             features, feature_bank, probs_bank, confidence_bank,
-            context_assignments_bank, centers_bank, args
+            context_assignments_bank, centers_bank, gt_labels, args
         )
     elif args.learn.refine_method == "GMM":
         feature_bank = banks["features"]
@@ -383,11 +446,12 @@ def train_target_domain(args):
     val_loader = DataLoader(
         val_dataset, batch_size=256, sampler=val_sampler, num_workers=2
     )
-    pseudo_item_list, banks, confidence, context_assignments, centers = eval_and_label_dataset(
+    pseudo_item_list, banks, confidence, context_assignments, centers, scale = eval_and_label_dataset(
         val_loader, model, banks=None, args=args
     )
     logging.info("2 - Computed initial pseudo labels")
-
+    
+    args.num_clusters = model.src_model.num_classes
     # Training data
     train_transform = get_augmentation_versions(args)
     train_dataset = ImageList(
@@ -422,7 +486,8 @@ def train_target_domain(args):
         # train for one epoch
         if args.learn.do_noise_detect:
             train_epoch_twin(train_loader, model, banks, confidence, 
-                             context_assignments, centers, optimizer, epoch, args)
+                             context_assignments, centers, scale,
+                             optimizer, epoch, args)
         else:
             train_epoch(train_loader, model, banks, optimizer, epoch, args)
         
@@ -438,8 +503,8 @@ def train_target_domain(args):
         
         
 def train_epoch_twin(train_loader, model, banks, confidence, 
-                     context_assignments, centers, optimizer, 
-                     epoch, args):
+                     context_assignments, centers, scale,
+                     optimizer, epoch, args):
     batch_time = AverageMeter("Time", ":6.3f")
     loss_meter = AverageMeter("Loss", ":.4f")
     top1_ins = AverageMeter("SSL-Acc@1", ":6.2f")
@@ -480,12 +545,14 @@ def train_epoch_twin(train_loader, model, banks, confidence,
 
         # strong aug model output
         feats_q, logits_q, logits_ins, feats_k, logits_k = model(images_q, images_k)
-        
+        with torch.no_grad():
+            probs_q = F.softmax(logits_q, dim=1)
+            probs_k = F.softmax(logits_k, dim=1)
         
         # Calculate reliable degree of pseudo labels
         if args.learn.use_ce_weight:
             with torch.no_grad():
-                CE_weight = calculate_reliability(centers, clear_confidence, feats_w, feats_q, feats_k)
+                CE_weight = calculate_reliability(probs_w, centers, clear_confidence, feats_w, feats_q, feats_k)
         else:
             CE_weight = 1.
         
@@ -523,7 +590,8 @@ def train_epoch_twin(train_loader, model, banks, confidence,
 
         # classification
         loss_cls, accuracy_psd = classification_loss(
-            logits_w, logits_q, pseudo_labels_w, CE_weight, args
+            logits_w, logits_q, logits_k, pseudo_labels_w, probs_q, probs_k, 
+            clear_confidence, scale, CE_weight, args
         )
         top1_psd.update(accuracy_psd.item(), len(logits_w))
 
@@ -671,16 +739,17 @@ def norm(x):
     return (x - x.min()) / (x.max()-x.min())
 
 @torch.no_grad()
-def calculate_reliability(centers, confidence, feats_w, feats_q, feats_k):
-    sim_w = norm(feats_w.mm(centers.T))
-    sim_q = norm(feats_q.mm(centers.T))
-    sim_k = norm(feats_k.mm(centers.T))
-    sim_avg = F.softmax((sim_w + sim_q + sim_k)/3, dim=1)
-    max_entropy = torch.log2(torch.tensor(centers.size(0)))
-    w = entropy(sim_avg)
+def calculate_reliability(probs_w, centers, confidence, feats_w, feats_q, feats_k):
+    # sim_w = norm(feats_w.mm(centers.T))
+    # sim_q = norm(feats_q.mm(centers.T))
+    # sim_k = norm(feats_k.mm(centers.T))
+    # sim_avg = F.softmax((sim_w + sim_q + sim_k)/3, dim=1)
+    max_entropy = torch.log2(torch.tensor(probs_w.size(1)))
+    w = entropy(probs_w)
+    # w = entropy(sim_avg)
     
     w = w / max_entropy
-    w = w * confidence
+    # w = w * confidence
     w = torch.exp(-w)
     
     return w
@@ -712,13 +781,28 @@ def instance_loss(logits_ins, pseudo_labels, mem_labels, contrast_type):
     return loss, accuracy
 
 
-def classification_loss(logits_w, logits_s, target_labels, CE_weight, args):
+def classification_loss(logits_w, logits_q, logits_k, target_labels, probs_q, probs_k, confidences, scale,
+                        CE_weight, args):
     if args.learn.ce_sup_type == "weak_weak":
         loss_cls = (CE_weight * cross_entropy_loss(logits_w, target_labels, args)).mean()
         accuracy = calculate_acc(logits_w, target_labels)
     elif args.learn.ce_sup_type == "weak_strong":
-        loss_cls = (CE_weight * cross_entropy_loss(logits_s, target_labels, args)).mean()
-        accuracy = calculate_acc(logits_s, target_labels)
+        loss_cls = (CE_weight * cross_entropy_loss(logits_q, target_labels, args)).mean()
+        accuracy = calculate_acc(logits_q, target_labels)
+    elif args.learn.ce_sup_type == "conb_strong_strong":
+        confidences = confidences.unsqueeze(1)
+        targets_onehot_noise = F.one_hot(target_labels, args.num_clusters).float().cuda()
+        
+        def comb(p1, p2, lam):
+                return (1 - lam) * p1 + lam * p2
+        
+        targets_corrected1 = comb(probs_k, targets_onehot_noise, confidences * scale)
+        targets_corrected2 = comb(probs_q, targets_onehot_noise, confidences * scale)
+        
+        def CE(logits, targets):
+            return - (targets * F.log_softmax(logits, dim=1)).sum(-1).mean()
+        loss_cls = CE(logits_q, targets_corrected1) + CE(logits_k, targets_corrected2)
+        accuracy = calculate_acc(logits_q, target_labels)
     else:
         raise NotImplementedError(
             f"{args.learn.ce_sup_type} CE supervision type not implemented."

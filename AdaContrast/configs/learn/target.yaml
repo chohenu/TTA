@@ -15,15 +15,15 @@ use_momory_bank : False
 # algo-related stuff
 aug_versions: "wss" # ["w", "ws", "wss", "ss"]
 dist_type: "cosine" # ["cosine", "euclidean"]
-ce_sup_type: "weak_strong" # ["weak_all", "weak_weak", "weak_strong", "self_all"]
-refine_method: "nearest_neighbors"
+ce_sup_type: "weak_strong" # ["weak_all", "weak_weak", "weak_strong", "conb_strong_strong"]
+refine_method: "nearest_neighbors" #["conf_based_nearest_neighbors"]
 num_neighbors: 10
 queue_size: -1
 epoch_labeling: false
 
 # For Noisy Detector
 do_noise_detect: True
-use_ce_weight: False
+use_ce_weight: True
 use_projector_q: False
 use_classfier_q: False
-sep_gmm: True
+sep_gmm: False
