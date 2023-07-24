@@ -9,8 +9,9 @@ ce_type: "reduction_none" # ["standard", "reduction_none"]
 alpha: 1.0
 beta: 1.0
 eta: 1.0
-add_cluster_loss : False
+add_cluster_loss : false
 use_momory_bank : False
+add_gt_in_bank : True
 
 # algo-related stuff
 aug_versions: "wss" # ["w", "ws", "wss", "ss"]

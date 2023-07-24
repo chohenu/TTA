@@ -52,6 +52,10 @@ class AdaMoCo(nn.Module):
         self.register_buffer(
             "mem_labels", torch.randint(0, src_model.num_classes, (K,))
         )
+        self.register_buffer(
+            "mem_gt", torch.randint(0, src_model.num_classes, (K,))
+        )
+
         self.mem_feat = F.normalize(self.mem_feat, dim=0)
 
         if checkpoint_path:
@@ -81,19 +85,29 @@ class AdaMoCo(nn.Module):
             param_k.data = param_k.data * self.m + param_q.data * (1.0 - self.m)
 
     @torch.no_grad()
-    def update_memory(self, keys, pseudo_labels):
+    def return_membank(self): 
+
+        return {'mem_feature': self.mem_feat.cpu().numpy(),
+                'mem_pseudo_labels': self.mem_labels.cpu().numpy(),
+                'mem_gt':self.mem_gt.cpu().numpy()}
+
+    @torch.no_grad()
+    def update_memory(self, keys, pseudo_labels, gt_labels):
         """
         Update features and corresponding pseudo labels
         """
         # gather keys before updating queue
         keys = concat_all_gather(keys)
         pseudo_labels = concat_all_gather(pseudo_labels)
+        gt_labels = concat_all_gather(gt_labels.to('cuda'))
+        
 
         start = self.queue_ptr
         end = start + len(keys)
         idxs_replace = torch.arange(start, end).cuda() % self.K
         self.mem_feat[:, idxs_replace] = keys.T
         self.mem_labels[idxs_replace] = pseudo_labels
+        self.mem_gt[idxs_replace] = gt_labels
         self.queue_ptr = end % self.K
 
     @torch.no_grad()

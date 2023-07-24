@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 import wandb
+import numpy as np
 
 from classifier import Classifier
 from image_list import ImageList
@@ -30,10 +31,12 @@ from utils import (
     AverageMeter,
     CustomDistributedDataParallel,
     ProgressMeter,
+    get_tsne_map,
 )
 
+import pickle
 from losses import ClusterLoss
-
+import pandas as pd
 # TODO : install PyTorchGaussianMixture
 # try: 
 #     from torch_clustering import PyTorchGaussianMixture
@@ -108,14 +111,24 @@ def eval_and_label_dataset(dataloader, model, banks, args):
         wandb_dict["Test Avg"] = acc_per_class.mean()
         wandb_dict["Test Per-class"] = acc_per_class
 
+    if False: 
+        import os
+        base_path = os.getcwd()
+        logging.info(f"Saving Memory Bank : {base_path}")
+        with open(f'{base_path}/val_{model.queue_ptr}.pickle','wb') as fw:
+            pickle.dump(model.return_membank, fw)
+
     probs = F.softmax(logits, dim=1)
     rand_idxs = torch.randperm(len(features)).cuda()
     banks = {
         "features": features[rand_idxs][: args.learn.queue_size],
         "probs": probs[rand_idxs][: args.learn.queue_size],
+        "logit": logits[rand_idxs][: args.learn.queue_size],
         "ptr": 0,
     }
-    
+    if args.learn.add_gt_in_bank: 
+        banks.update({"gt": gt_labels[rand_idxs]})
+
     confidence, context_assignments, centers = None, None, None
     # refine predicted labels
     if args.learn.do_noise_detect:
@@ -129,10 +142,27 @@ def eval_and_label_dataset(dataloader, model, banks, args):
         logging.info(
             f"noise_accuracy: {noise_accuracy}"
         )
-    
+
+    return_index = True 
     pred_labels, _, acc  = refine_predictions(
-        features, probs, banks, args=args, gt_labels=gt_labels
+        features, probs, banks, args=args, gt_labels=gt_labels, return_index=True
     )
+    
+    if return_index and args.learn.refine_method == "nearest_neighbors":
+        array_gt = gt_labels.cpu().numpy()
+        select_index = 0 
+        unique_class, index_nums = np.unique(array_gt,return_index = True)
+        class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 'Horse', 'Knife', 'Motorcycle', 'Person', 'Plant', 'Skateboard', 'Train', 'Truck']
+        for i,index,cls_name in zip(unique_class, index_nums,class_name):
+            class_index = top_k_index[array_gt == i]
+            
+            image_list = [dataloader.dataset.__getitem__(i)[0] for i in class_index[select_index]]
+            image_list.insert(0, dataloader.dataset.__getitem__(indices[index])[0])
+            wandb_dict.update({f'class_{i}':wandb.Image(
+                                            torch.concat(image_list,dim=2),
+                                            caption=f"fist is origin image class_{cls_name}")
+                                            })
+
     wandb_dict["Test Post Acc"] = acc
     if args.data.dataset == "VISDA-C":
         acc_per_class = per_class_accuracy(
@@ -156,7 +186,7 @@ def eval_and_label_dataset(dataloader, model, banks, args):
 
 @torch.no_grad()
 def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
-    pred_probs = []
+    pred_probs, stack_num_neighbors = [], []
     for feats in features.split(64):
         distances = get_distances(feats, features_bank, args.learn.dist_type)
         _, idxs = distances.sort()
@@ -164,10 +194,136 @@ def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
         # (64, num_nbrs, num_classes), average over dim=1
         probs = probs_bank[idxs, :].mean(1)
         pred_probs.append(probs)
+        stack_num_neighbors.append(idxs.cpu().numpy())
+
     pred_probs = torch.cat(pred_probs)
     _, pred_labels = pred_probs.max(dim=1)
+    stack_num_neighbors = np.concatenate(stack_num_neighbors)
 
-    return pred_labels, pred_probs
+    return pred_labels, pred_probs, stack_num_neighbors
+
+@torch.no_grad()
+def soft_k_nearest_neighbors_select(features, features_bank, logit_bank, probs_bank,args):
+    pred_probs, keep_index, remove_index = [], [], []
+    for feats in features.split(64):
+        distances = get_distances(feats, features_bank, args.learn.dist_type)
+        _, idxs = distances.sort()
+        idxs = idxs[:, : args.learn.num_neighbors]
+        # (64, num_nbrs, num_classes), average over dim=1
+        probs_bank = probs_bank[idxs, :].mean(1)
+
+        ###############################
+        #### select psuedo labeling####
+        ###############################
+        pred_start = logit_bank[idxs, :] # select topk similar index 
+        pred_start = pred_start.permute((1,0,2)) # change (num_nbrs, 64, num_classes)
+        outputs_ema = pred_start.mean(0) # Average the predictions for psuedo labels (65, num_classes)
+        
+        pred_start     = torch.nn.functional.softmax(pred_start, dim=2).max(2)[0] 
+        ## Confidence Based Selection
+        pred_con       = pred_start                                                                  
+        conf_thres     = pred_con.mean()
+        confidence_sel = pred_con.mean(0) > conf_thres
+        conf_th = pred_con.mean()
+
+        ## Uncertainty Based Selection
+        pred_std              = pred_start.std(0)                                                                               
+        uncertainty_threshold = pred_std.mean(0)    
+        uncertainty_sel       = pred_std<uncertainty_threshold
+        uncer_th = pred_std.mean(0)
+
+        ## Confidence and Uncertainty Based Selection
+        truth_array = torch.logical_and(uncertainty_sel, confidence_sel)
+        try: 
+            ind_keep   = truth_array.cpu().nonzero()
+            ind_remove = (~truth_array).cpu().nonzero()
+        except: 
+            breakpoint()
+
+        # try:
+        #     ind_total = torch.cat((torch.squeeze(ind_keep), torch.squeeze(ind_remove)), dim=0)
+        # except:
+        #     ind_total = ind_remove
+
+        # ## Confidence Score Difference (DoC) Based Selection
+        # try: 
+        #     if ind_remove.numel():
+        #         threshold = torch.zeros(len(ind_remove))
+        #         num = 0
+        #         for kk in ind_remove:
+        #             out     = torch.squeeze(outputs_ema[kk])
+        #             out , _ = out.sort(descending=True)
+        #             threshold[num] = out[0] - out[1]
+        #             num    += 1
+
+        #         pre_threshold = threshold.mean(0) 
+        #         truth_array1  = threshold>pre_threshold
+        #         truth_array2  = pred_std[ind_remove] < pred_std[ind_remove].mean(0)                   ## Add Underconfident Clean Samples 
+        #         truth_array   = torch.logical_and(truth_array1.cuda(), truth_array2.cuda())
+        #         ind_add       = truth_array.nonzero()
+                
+        #         try:
+        #             ind_keep   = torch.cat((torch.squeeze(ind_keep), torch.squeeze(ind_remove[ind_add])), dim=0)
+        #             ind_remove = torch.stack([kk for kk in ind_total if kk not in ind_keep])
+        #         except:
+        #             pass 
+        # except: 
+        #     print(ind_remove)
+        #     breakpoint()
+
+        keep_index.append(ind_keep)
+        remove_index.append(ind_remove)
+
+        ################################
+        ##### done psuedo labeling #####
+        ################################
+        pred_probs.append(probs_bank)
+        
+
+    pred_probs = torch.cat(pred_probs)
+    _, pred_labels = pred_probs.max(dim=1)
+    keep_index = torch.cat(keep_index)
+    remove_index = torch.cat(remove_index)
+    breakpoint()
+    return pred_labels, pred_probs, [keep_index,remove_index]
+
+@torch.no_grad()
+def soft_k_nearest_neighbors_ignore(features, features_bank, probs_bank, args):
+    pred_probs, stack_num_neighbors = [], []
+    for feats in features.split(64):
+        distances = get_distances(feats, features_bank, args.learn.dist_type)
+        _, idxs = distances.sort()
+        idxs = idxs[:, : args.learn.num_neighbors]
+        # (64, num_nbrs, num_classes), average over dim=1
+        probs = probs_bank[idxs, :].mean(1)
+        pred_probs.append(probs)
+        stack_num_neighbors.append(idxs.cpu().numpy())
+
+    pred_probs = torch.cat(pred_probs)
+    _, pred_labels = pred_probs.max(dim=1)
+    stack_num_neighbors = np.concatenate(stack_num_neighbors)
+
+    return pred_labels, pred_probs, stack_num_neighbors
+
+
+@torch.no_grad()
+def soft_pos_neg_k_nearest_neighbors(features, features_bank, probs_bank, args):
+    pred_probs, stack_num_neighbors = [], []
+    for feats in features.split(64):
+        distances = get_distances(feats, features_bank, args.learn.dist_type)
+        _, idxs = distances.sort()
+        pos_idxs = idxs[:, : args.learn.num_neighbors]
+        neg_idxs = idxs[:, : args.learn.num_neighbors]
+        # (64, num_nbrs, num_classes), average over dim=1
+        probs = probs_bank[pos_idxs, :].mean(1)
+        pred_probs.append(probs)
+        stack_num_neighbors.append(pos_idxs.cpu().numpy())
+
+    pred_probs = torch.cat(pred_probs)
+    _, pred_labels = pred_probs.max(dim=1)
+    stack_num_neighbors = np.concatenate(stack_num_neighbors)
+
+    return pred_labels, pred_probs, stack_num_neighbors
 
 
 @torch.no_grad()
@@ -210,13 +366,14 @@ def noise_detect(cluster_labels, labels, features, args, temp=0.25):
     return confidence, context_assigments, centers
 
 @torch.no_grad()
-def update_labels(banks, idxs, features, logits, args):
+def update_labels(banks, idxs, features, logits, labels, args):
     # 1) avoid inconsistency among DDP processes, and
     # 2) have better estimate with more data points
     if args.distributed:
         idxs = concat_all_gather(idxs)
         features = concat_all_gather(features)
         logits = concat_all_gather(logits)
+        labels = concat_all_gather(labels.to("cuda"))
 
     probs = F.softmax(logits, dim=1)
 
@@ -225,8 +382,11 @@ def update_labels(banks, idxs, features, logits, args):
     idxs_replace = torch.arange(start, end).cuda() % len(banks["features"])
     banks["features"][idxs_replace, :] = features
     banks["probs"][idxs_replace, :] = probs
+    banks["logits"][idxs_replace, :] = logits
     banks["ptr"] = end % len(banks["features"])
 
+    if args.learn.add_gt_in_bank:
+        banks['gt'][idxs_replace] = labels
 
 @torch.no_grad()
 def refine_predictions(
@@ -235,13 +395,31 @@ def refine_predictions(
     banks,
     args,
     gt_labels=None,
+    return_index=True,
 ):
     if args.learn.refine_method == "nearest_neighbors":
         feature_bank = banks["features"]
         probs_bank = banks["probs"]
-        pred_labels, probs = soft_k_nearest_neighbors(
+        pred_labels, probs, stack_index = soft_k_nearest_neighbors(
             features, feature_bank, probs_bank, args
         )
+
+    elif args.learn.refine_method == "nearest_neighbors_ignore":
+        feature_bank = banks["features"]
+        probs_bank = banks["probs"]
+        pred_labels, probs, stack_index, ignore_index = soft_k_nearest_neighbors_ignore(
+            features, feature_bank, probs_bank, args
+        )
+
+    elif args.learn.refine_method == "nearest_neighbors_select":
+        feature_bank = banks["features"]
+        probs_bank = banks["probs"]
+        logit_bank = banks["logit"]
+        pred_labels, probs, stack_index = soft_k_nearest_neighbors_select(
+            features, feature_bank, logit_bank, probs_bank, args
+        )
+
+
     elif args.learn.refine_method == "GMM":
         feature_bank = banks["features"]
         probs_bank = banks["probs"]
@@ -260,8 +438,10 @@ def refine_predictions(
     accuracy = None
     if gt_labels is not None:
         accuracy = (pred_labels == gt_labels).float().mean() * 100
-
-    return pred_labels, probs, accuracy
+    if return_index: 
+        return pred_labels, probs, accuracy, stack_index
+    else:
+        return pred_labels, probs, accuracy
 
 
 def get_augmentation_versions(args):
@@ -441,7 +621,7 @@ def train_epoch_twin(train_loader, model, banks, confidence,
     zero_tensor = torch.tensor([0.0]).to("cuda")
     for i, data in enumerate(train_loader):
         # unpack and move data
-        images, _, idxs = data
+        images, labels, idxs = data
         idxs = idxs.to("cuda")
         images_w, images_q, images_k = (
             images[0].to("cuda"),
@@ -458,8 +638,8 @@ def train_epoch_twin(train_loader, model, banks, confidence,
         feats_w, logits_w = model(images_w, cls_only=True)
         with torch.no_grad():
             probs_w = F.softmax(logits_w, dim=1)
-            pseudo_labels_w, probs_w, _ = refine_predictions(
-                feats_w, probs_w, banks, args=args
+            pseudo_labels_w, probs_w, _, top_k_index = refine_predictions(
+                feats_w, probs_w, banks, args=args, return_index=True
             )
 
         # strong aug model output
@@ -471,7 +651,7 @@ def train_epoch_twin(train_loader, model, banks, confidence,
             CE_weight = calculate_reliability(centers, clear_confidence, feats_w, feats_q, feats_k)
         
         # update key features and corresponding pseudo labels
-        model.update_memory(feats_k, pseudo_labels_w)
+        model.update_memory(keys, pseudo_labels_w, labels)
 
 
         # add cluster contrastive los s
@@ -603,6 +783,10 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
         loss_cls, accuracy_psd = classification_loss(
             logits_w, logits_q, pseudo_labels_w, args
         )
+
+        if args.learn.ce_type == "none": 
+            breakpoint()
+            print(accuracy_psd.shape)
         top1_psd.update(accuracy_psd.item(), len(logits_w))
 
         # diversification
@@ -627,7 +811,7 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
         with torch.no_grad():
             feats_w, logits_w = model.momentum_model(images_w, return_feats=True)
 
-        update_labels(banks, idxs, feats_w, logits_w, args)
+        update_labels(banks, idxs, feats_w, logits_w, labels, args)
 
         if use_wandb(args):
             wandb_dict = {
@@ -636,6 +820,8 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
                 "loss_div": args.learn.eta * loss_div.item(),
                 "acc_ins": accuracy_ins.item(),
             }
+            if args.learn.add_cluster_loss:
+                wandb_dict.update({'loss_cluster':loss_cluster.item()})
 
             wandb.log(wandb_dict, commit=(i != len(train_loader) - 1))
 

@@ -21,7 +21,11 @@ thrid_party/TCL/dataset
 AdaContrast/checkpoint
 AdaContrast/output
 AdaContrast/datasets
+AdaContrast/data/
+AdaContrast/debug/
 
 classification/.ipynb_checkpoints/
 classification/models/.ipynb_checkpoints/
 classification/*.ipynb
+
+
