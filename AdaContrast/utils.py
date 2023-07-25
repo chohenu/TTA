@@ -317,3 +317,22 @@ def is_master(args):
 
 def use_wandb(args):
     return is_master(args) and args.use_wandb
+
+
+from sklearn.manifold import TSNE
+import numpy as np
+import matplotlib.pyplot as plt
+
+def get_tsne_map(features,
+                labels): 
+    tsne = TSNE(n_components=2)
+    cluster = np.array(tsne.fit_transform(np.array(features)))
+    
+    plt.figure(figsize=(10, 10))
+    class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 'Horse', 'Knife', 'Motorcycle', 'Person', 'Plant', 'Skateboard', 'Train', 'Truck']
+    
+    for i, label in zip(range(len(class_name)), class_name):
+        idx = np.where(labels == i)
+        plt.scatter(cluster[idx, 0], cluster[idx, 1], marker='.', label=label)
+
+    return plt

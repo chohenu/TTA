@@ -1,4 +1,4 @@
-SRC_MODEL_DIR=$1
+SRC_MODEL_DIR="/opt/tta/AdaContrast/checkpoint/VISDA-C/"
 
 PORT=10005
 MEMO="confidence2knn"
