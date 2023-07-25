@@ -991,6 +991,7 @@ def instance_loss(logits_ins, pseudo_labels, mem_labels, contrast_type):
 
 
 def classification_loss(logits_w, logits_s, target_labels, CE_weight, args):
+    if not args.learn.do_noise_detect: CE_weight = 1.
     if args.learn.ce_sup_type == "weak_weak":
         loss_cls = (CE_weight * cross_entropy_loss(logits_w, target_labels, args)).mean()
         accuracy = calculate_acc(logits_w, target_labels)
