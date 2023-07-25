@@ -15,7 +15,6 @@ datasets/
 
 thrid_party/Twin-Contrastive-Learning/save
 thrid_party/Twin-Contrastive-Learning/datasets
-
 thrid_party/TCL/dataset
 
 AdaContrast/checkpoint
@@ -23,9 +22,13 @@ AdaContrast/output
 AdaContrast/datasets
 AdaContrast/data/
 AdaContrast/debug/
+AdaContrast/select/
 
 classification/.ipynb_checkpoints/
 classification/models/.ipynb_checkpoints/
 classification/*.ipynb
 
 
+AdaContrast/clustering/
+select/domainnet-126/
+select/VISDA-C/
