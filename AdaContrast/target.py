@@ -16,7 +16,7 @@ import wandb
 import numpy as np
 
 from classifier import Classifier
-from image_list import ImageList, mixup_data
+from image_list import ImageList, mixup_data, each_mixup_data
 from moco.builder import AdaMoCo
 from moco.loader import NCropsTransform
 from utils import (
@@ -37,7 +37,7 @@ from utils import (
 
 import random
 import pickle
-from losses import ClusterLoss
+from losses import ClusterLoss, MixcoLoss
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 # TODO : install PyTorchGaussianMixture
@@ -143,9 +143,9 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
     probs = F.softmax(logits, dim=1)
     rand_idxs = torch.randperm(len(features)).cuda()
     banks = {
-        "features": features[rand_idxs][: args.learn.queue_size],
-        "probs": probs[rand_idxs][: args.learn.queue_size],
-        "logit": logits[rand_idxs][: args.learn.queue_size],
+        "features": features[rand_idxs][: args.learn.queue_size], # 5000, 256
+        "probs": probs[rand_idxs][: args.learn.queue_size], # 5000, 12 (w/ softmax)
+        "logit": logits[rand_idxs][: args.learn.queue_size], # 5000, 12 (w/o softmax)
         "ptr": 0,
     }
     if args.learn.add_gt_in_bank: 
@@ -154,7 +154,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
     if args.learn.return_index: 
         banks.update({"index": indices[rand_idxs]})
 
-    confidence, context_assignments, centers = None, None, None
+    confidence, context_assignments, centers, estimated_clean_ratio = None, None, None, None
     # refine predicted labels
     if args.learn.do_noise_detect:
         logging.info(
@@ -179,6 +179,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         banks["context_assignments"] = context_assignments[rand_idxs][: args.learn.queue_size]
         banks["centers"] = centers
   
+    # 50000,1 (0~12), (0~13) 13 abormal class 
     pred_labels, _, acc, top_k_index = refine_predictions(
             features, probs, banks, args=args, gt_labels=gt_labels, return_index=args.learn.return_index
     )
@@ -221,15 +222,14 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
 
     if use_wandb(args):
         wandb.log(wandb_dict)
-
-    return pseudo_item_list, banks, confidence, context_assignments, centers, estimated_clean_ratio
-
+    
+    return pseudo_item_list, banks, confidence, context_assignments, centers
 
 @torch.no_grad()
 def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
     pred_probs = []
     for feats in features.split(64):
-        distances = get_distances(feats, features_bank, args.learn.dist_type)
+        distances = get_distances(feats, features_bank, args.learn.dist_type) # 64,256, bank: 5000, 256
         _, idxs = distances.sort()
         idxs = idxs[:, : args.learn.num_neighbors]
         # (64, num_nbrs, num_classes), average over dim=1
@@ -239,6 +239,21 @@ def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
     _, pred_labels = pred_probs.max(dim=1)
 
     return pred_labels, pred_probs
+
+# @torch.no_grad()
+# def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
+#     pred_probs = []
+#     pesudo_prob, pesudo_indexes = features_bank.max(dim=1) # prob(0~1), (0~12)
+    
+#     for pesudo_index_num in np.uniqe(pesudo_indexes): # (0~12 center )
+#         first_class_index = [pesudo_indexes == pesudo_index_num]
+#         center_feat = features_bank[first_class_index].mean(0) # n,256 -> 256
+#         distances = get_distances(features, center_feat, args.learn.dist_type) # all distance (1,50000)
+#         center_dist_filtering = [distances > 0.5] # distance 0.5 이상일떄 
+
+#         pesudo_index[~center_dist_filtering] == 50
+
+#     return pred_labels, pred_probs
 
 @torch.no_grad()
 def soft_k_nearest_neighbors_select(features, features_bank, probs_bank, logit_bank,args):
@@ -590,6 +605,7 @@ def train_target_domain(args):
         K=args.model_tta.queue_size,
         m=args.model_tta.m,
         T_moco=args.model_tta.T_moco,
+        algo=args.model_tta.type, 
     ).cuda()
     if args.distributed:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -609,6 +625,7 @@ def train_target_domain(args):
     val_loader = DataLoader(
         val_dataset, batch_size=256, sampler=val_sampler, num_workers=2
     )
+    print(len(val_dataset))
     pseudo_item_list, banks, confidence, context_assignments, centers = eval_and_label_dataset(
         val_loader, model, banks=None, epoch=-1, args=args
     )
@@ -829,7 +846,7 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
         step = i + epoch * len(train_loader)
         adjust_learning_rate(optimizer, step, args)
 
-        feats_w, logits_w = model(images_w, cls_only=True)
+        feats_w, logits_w = model(images_w, cls_only=True) # to make pseudo label
         with torch.no_grad():
             probs_w = F.softmax(logits_w, dim=1)
             pseudo_labels_w, probs_w, _ = refine_predictions(
@@ -888,25 +905,34 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
         # instance accuracy shown for only one process to give a rough idea
         top1_ins.update(accuracy_ins.item(), len(logits_ins))
 
+        if args.model_tta.type == 'mixco': loss_mixco = mixcoloss(feats_q, logits_q)
+        
         # classification
         loss_cls, accuracy_psd = classification_loss(
-            logits_w, logits_q, pseudo_labels_w, None, args
+            logits_w, logits_k, pseudo_labels_w, None, args
         )
-
         top1_psd.update(accuracy_psd.item(), len(logits_w))
 
         # diversification
-        loss_div = (
-            diversification_loss(logits_w, logits_q, args)
-            if args.learn.eta > 0
-            else zero_tensor
-        )
+        if args.learn.eta != 0 : 
+            loss_div = (
+                diversification_loss(logits_w, logits_k, args)
+                if args.learn.eta > 0
+                else zero_tensor
+            )
 
-        loss = (
-            args.learn.alpha * loss_cls
-            + args.learn.beta * loss_ins
-            + args.learn.eta * loss_div
-        )
+            loss = (
+                args.learn.alpha * loss_cls
+                + args.learn.beta * loss_ins
+                + args.learn.eta * loss_div
+            )
+        else:
+            loss = (
+                args.learn.alpha * loss_cls
+                + args.learn.beta * loss_ins
+                )
+
+        if args.model_tta.type == 'mixco': loss += loss_mixco
         if args.learn.use_sim_regular: loss += loss_sim
         if args.learn.add_mixup_loss: loss+= loss_mix
 
@@ -926,9 +952,11 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
             wandb_dict = {
                 "loss_cls": args.learn.alpha * loss_cls.item(),
                 "loss_ins": args.learn.beta * loss_ins.item(),
-                "loss_div": args.learn.eta * loss_div.item(),
                 "acc_ins": accuracy_ins.item(),
             }
+
+            if args.model_tta.type == 'mixco': wandb_dict.update({"loss_mixco":loss_mixco.item()})
+            if args.learn.eta != 0: wandb_dict.update({"loss_div": args.learn.eta * loss_div.item()})
             if args.learn.use_sim_regular: wandb_dict.update({'loss_sim': loss_sim.item()})
             if args.learn.add_mixup_loss: wandb_dict.update({'loss_mix': loss_mix.item()})
             
@@ -1053,3 +1081,10 @@ def entropy_minimization(logits):
 
 def mixup_criterion(pred, y_a, y_b, lam):
     return lam * F.cross_entropy(pred, y_a) + (1 - lam) * F.cross_entropy(pred, y_b)
+
+def mixcoloss(logit_mix, y_mix):
+    probs = F.softmax(logit_mix, 1) 
+    nll_loss = (- y_mix * torch.log(probs)).sum(1).mean()
+    # accuracy = calculate_acc(logit_mix, y_mix)
+    return nll_loss
+

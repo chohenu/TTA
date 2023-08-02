@@ -13,7 +13,7 @@ add_cluster_loss : false
 use_momory_bank : False
 add_gt_in_bank : True
 use_sim_regular : false
-add_mixup_loss : True
+add_mixup_loss : False
 
 # algo-related stuff
 aug_versions: "wss" # ["w", "ws", "wss", "ss"]

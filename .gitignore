@@ -32,3 +32,4 @@ classification/*.ipynb
 AdaContrast/clustering/
 select/domainnet-126/
 select/VISDA-C/
+debug/VISDA-C/

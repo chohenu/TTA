@@ -7,7 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils import concat_all_gather
+from torch.autograd import Variable
 
+from image_list import ImageList, mixup_data, each_mixup_data
+import numpy as np
 
 class AdaMoCo(nn.Module):
     """
@@ -22,6 +25,7 @@ class AdaMoCo(nn.Module):
         K=16384,
         m=0.999,
         T_moco=0.07,
+        algo='moco', 
         checkpoint_path=None,
     ):
         """
@@ -36,6 +40,7 @@ class AdaMoCo(nn.Module):
         self.m = m
         self.T_moco = T_moco
         self.queue_ptr = 0
+        self.algo = algo
 
         # create the encoders
         self.src_model = src_model
@@ -90,6 +95,23 @@ class AdaMoCo(nn.Module):
         return {'mem_feature': self.mem_feat.cpu().numpy(),
                 'mem_pseudo_labels': self.mem_labels.cpu().numpy(),
                 'mem_gt':self.mem_gt.cpu().numpy()}
+                
+    @torch.no_grad()
+    def _dequeue_and_enqueue(self, keys):
+        # gather keys before updating queue
+        keys = concat_all_gather(keys)
+
+        batch_size = keys.shape[0]
+
+        ptr = int(self.queue_ptr)
+        assert self.K % batch_size == 0  # for simplicity
+
+        # replace the keys at ptr (dequeue and enqueue)
+        self.mem_feat[:, ptr:ptr + batch_size] = keys.T
+        ptr = (ptr + batch_size) % self.K  # move pointer
+
+        self.queue_ptr[0] = ptr
+
 
     @torch.no_grad()
     def update_memory(self, keys, pseudo_labels, gt_labels):
@@ -105,7 +127,7 @@ class AdaMoCo(nn.Module):
         start = self.queue_ptr
         end = start + len(keys)
         idxs_replace = torch.arange(start, end).cuda() % self.K
-        self.mem_feat[:, idxs_replace] = keys.T
+        # self.mem_feat[:, idxs_replace] = keys.T
         self.mem_labels[idxs_replace] = pseudo_labels
         self.mem_gt[idxs_replace] = gt_labels
         self.queue_ptr = end % self.K
@@ -156,6 +178,50 @@ class AdaMoCo(nn.Module):
         idx_this = idx_unshuffle.view(num_gpus, -1)[gpu_idx]
 
         return x_gather[idx_this]
+    
+    @torch.no_grad()
+    def mixup_data(im_q, alpha=1.0, use_cuda=True):
+        B = im_q.size()[0]
+        sid = int(B/2)
+        im_q1, im_q2 = im_q[:sid], im_q[sid:]
+
+        lam = torch.from_numpy(np.random.uniform(0, 1, size=(sid,1,1,1))).float().to(im_q.device)
+        imgs_mix = lam * im_q1 + (1-lam) * im_q2
+        lbls_mix = torch.cat((torch.diag(lam.squeeze()), torch.diag((1-lam).squeeze())), dim=1)
+
+        return imgs_mix, lbls_mix
+
+    @torch.no_grad()
+    def img_mixer(self, im_q):
+        B = im_q.size(0)
+        if B % 2 == 0: 
+            sid = int(B/2)
+            end = B
+        else: 
+            sid = int(B/2)
+            end = B-1
+
+        im_q1, im_q2 = im_q[:sid], im_q[sid:end]
+        
+        # each image get different lambda
+        lam = torch.from_numpy(np.random.uniform(0, 1, size=(sid,1,1,1))).float().to(im_q.device)
+        imgs_mix = lam * im_q1 + (1-lam) * im_q2
+        lbls_mix = torch.cat((torch.diag(lam.squeeze()), torch.diag((1-lam).squeeze())), dim=1)
+        
+        return imgs_mix, lbls_mix
+    
+    @torch.no_grad()
+    def B_img_mixer(self, im_q):
+        B = im_q.size(0)
+        index = torch.randperm(B).cuda()
+        # each image get different lambda
+        lam = torch.from_numpy(np.random.uniform(0, 1, size=(B,1,1,1))).float().to(im_q.device)
+
+        imgs_mix = lam * im_q + (1-lam) * im_q[index]
+        lbls_mix = torch.cat((torch.diag(lam.squeeze()), torch.diag((1-lam).squeeze())), dim=1)
+        
+        return imgs_mix, lbls_mix
+
 
     def forward(self, im_q, im_k=None, cls_only=False):
         """
@@ -169,13 +235,24 @@ class AdaMoCo(nn.Module):
             k: <B, D> contrastive keys
         """
 
-        # compute query features
-        feats_q, logits_q = self.src_model(im_q, return_feats=True)
-
         if cls_only:
+            # compute query features
+            feats_q, logits_q = self.src_model(im_q, return_feats=True)
+            q = F.normalize(feats_q, dim=1)
             return feats_q, logits_q
 
-        q = F.normalize(feats_q, dim=1)
+        else: 
+            imgs_mix, lbls_mix = self.img_mixer(im_q)
+            imgs_mix, lbls_mix = map(Variable, (imgs_mix, lbls_mix))
+
+            # compute query features
+            feats_q, logits_q  = self.src_model(torch.cat((im_q, imgs_mix)), return_feats=True) # queries: NxC
+            q = nn.functional.normalize(feats_q, dim=1)
+
+            q_mix = q[im_q.size(0):]
+            q = q[:im_q.size(0)]
+
+        
 
         # compute key features
         with torch.no_grad():  # no gradient to keys
@@ -198,10 +275,27 @@ class AdaMoCo(nn.Module):
         l_neg = torch.einsum("nc,ck->nk", [q, self.mem_feat.clone().detach()])
 
         # logits: Nx(1+K)
-        logits_ins = torch.cat([l_pos, l_neg], dim=1)
+        logits_ins = torch.cat([l_pos, l_neg], dim=1) # to contrastive learnig
+        
+        if self.algo == 'moco': 
+            # apply temperature
+            logits_ins /= self.T_moco
 
-        # apply temperature
-        logits_ins /= self.T_moco
+            # dequeue and enqueue will happen outside
+            return feats_q, logits_q, logits_ins, k, logits_k
 
-        # dequeue and enqueue will happen outside
-        return feats_q, logits_q, logits_ins, k, logits_k
+        elif self.algo == 'mixco': 
+            # mixed logits: N/2 x N
+            logits_mix_pos = torch.mm(q_mix, k.transpose(0, 1)) 
+            # mixed negative logits: N/2 x K
+            logits_mix_neg = torch.mm(q_mix, self.mem_feat.clone().detach())
+            logits_mix = torch.cat([logits_mix_pos, logits_mix_neg], dim=1) # N/2 x (N+K)
+            lbls_mix = torch.cat([lbls_mix, torch.zeros_like(logits_mix_neg)], dim=1)
+
+            # apply temperature
+            logits_ins /= self.T_moco
+            logits_mix /= 1
+            # # dequeue and enqueue
+            # self._dequeue_and_enqueue(k)
+
+            return logits_mix, lbls_mix, logits_ins, k, logits_q[:im_q.size(0)]

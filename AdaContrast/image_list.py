@@ -89,3 +89,19 @@ def mixup_data(x, y, alpha=1.0, use_cuda=True):
     mixed_x = lam * x + (1 - lam) * x[index, :]
     y_a, y_b = y, y[index]
     return mixed_x, y_a, y_b, lam
+
+@torch.no_grad()
+def each_mixup_data(x, y): 
+    B = x.size(0)
+    assert B % 2 == 0
+    sid = int(B/2)
+    im_q1, im_q2 = x[:sid], x[sid:]
+    y_a, y_b = y[:sid], y[sid:]
+    
+    # each image get different lambda
+    lam = torch.from_numpy(np.random.uniform(0, 1, size=(sid,1,1,1))).float().to(x.device)
+    imgs_mix = lam * im_q1 + (1-lam) * im_q2
+    lbls_mix = torch.cat((torch.diag(lam.squeeze()), torch.diag((1-lam).squeeze())), dim=1)
+
+
+    return imgs_mix, y_a, y_b, lbls_mix

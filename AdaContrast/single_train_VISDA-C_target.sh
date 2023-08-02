@@ -1,6 +1,6 @@
 SRC_MODEL_DIR="/opt/tta/AdaContrast/checkpoint/VISDA-C/"
 
-PORT=10001
+PORT=10002
 MEMO="target"
 
 for SEED in 2020
