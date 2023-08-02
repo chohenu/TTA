@@ -19,9 +19,11 @@ class AdaMoCo(nn.Module):
         self,
         src_model,
         momentum_model,
+        dataset_length=0,
         K=16384,
         m=0.999,
         T_moco=0.07,
+        temporal_length=0,
         checkpoint_path=None,
     ):
         """
@@ -36,7 +38,11 @@ class AdaMoCo(nn.Module):
         self.m = m
         self.T_moco = T_moco
         self.queue_ptr = 0
-
+        self.mem_ptr = 0
+        
+        # temporal_length
+        self.memory_length = temporal_length
+        
         # create the encoders
         self.src_model = src_model
         self.momentum_model = momentum_model
@@ -50,7 +56,10 @@ class AdaMoCo(nn.Module):
         # create the memory bank
         self.register_buffer("mem_feat", torch.randn(feature_dim, K))
         self.register_buffer(
-            "mem_labels", torch.randint(0, src_model.num_classes, (K,))
+            "idxs", torch.randint(0, dataset_length, (self.K,))
+        )
+        self.register_buffer(
+            "mem_labels", torch.randint(0, src_model.num_classes, (dataset_length, self.memory_length))
         )
         self.register_buffer(
             "mem_gt", torch.randint(0, src_model.num_classes, (K,))
@@ -92,11 +101,12 @@ class AdaMoCo(nn.Module):
                 'mem_gt':self.mem_gt.cpu().numpy()}
 
     @torch.no_grad()
-    def update_memory(self, keys, pseudo_labels, gt_labels):
+    def update_memory(self, epoch, idxs, keys, pseudo_labels, gt_labels):
         """
         Update features and corresponding pseudo labels
         """
         # gather keys before updating queue
+        idxs = concat_all_gather(idxs)
         keys = concat_all_gather(keys)
         pseudo_labels = concat_all_gather(pseudo_labels)
         gt_labels = concat_all_gather(gt_labels.to('cuda'))
@@ -106,9 +116,12 @@ class AdaMoCo(nn.Module):
         end = start + len(keys)
         idxs_replace = torch.arange(start, end).cuda() % self.K
         self.mem_feat[:, idxs_replace] = keys.T
-        self.mem_labels[idxs_replace] = pseudo_labels
+        self.idxs[idxs_replace] = idxs
         self.mem_gt[idxs_replace] = gt_labels
         self.queue_ptr = end % self.K
+        
+        self.mem_labels[idxs, self.mem_ptr] = pseudo_labels
+        self.mem_ptr = epoch % self.memory_length
 
     @torch.no_grad()
     def _batch_shuffle_ddp(self, x):

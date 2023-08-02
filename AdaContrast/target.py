@@ -222,7 +222,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
     if use_wandb(args):
         wandb.log(wandb_dict)
 
-    return pseudo_item_list, banks, confidence, context_assignments, centers, estimated_clean_ratio
+    return pseudo_item_list, banks, confidence, context_assignments, centers
 
 
 @torch.no_grad()
@@ -238,7 +238,7 @@ def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
     pred_probs = torch.cat(pred_probs)
     _, pred_labels = pred_probs.max(dim=1)
 
-    return pred_labels, pred_probs
+    return pred_labels, pred_probs, None
 
 @torch.no_grad()
 def soft_k_nearest_neighbors_select(features, features_bank, probs_bank, logit_bank,args):
@@ -584,18 +584,6 @@ def train_target_domain(args):
     train_target = (args.data.src_domain != args.data.tgt_domain)
     src_model = Classifier(args, train_target, checkpoint_path)
     momentum_model = Classifier(args, train_target, checkpoint_path)
-    model = AdaMoCo(
-        src_model,
-        momentum_model,
-        K=args.model_tta.queue_size,
-        m=args.model_tta.m,
-        T_moco=args.model_tta.T_moco,
-    ).cuda()
-    if args.distributed:
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        model = CustomDistributedDataParallel(model, device_ids=[args.gpu])
-    logging.info(f"1 - Created target model")
-
     val_transform = get_augmentation("test")
     label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_list.txt")
     val_dataset = ImageList(
@@ -609,6 +597,21 @@ def train_target_domain(args):
     val_loader = DataLoader(
         val_dataset, batch_size=256, sampler=val_sampler, num_workers=2
     )
+    model = AdaMoCo(
+        src_model,
+        momentum_model,
+        dataset_length=len(val_dataset),
+        K=args.model_tta.queue_size,
+        m=args.model_tta.m,
+        T_moco=args.model_tta.T_moco,
+        temporal_length=args.model_tta.temporal_length
+    ).cuda()
+    if args.distributed:
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model = CustomDistributedDataParallel(model, device_ids=[args.gpu])
+    logging.info(f"1 - Created target model")
+
+   
     pseudo_item_list, banks, confidence, context_assignments, centers = eval_and_label_dataset(
         val_loader, model, banks=None, epoch=-1, args=args
     )
@@ -718,9 +721,9 @@ def train_epoch_twin(train_loader, model, banks, confidence,
                 CE_weight = calculate_reliability(probs_w, centers, clear_confidence, feats_w, feats_q, feats_k)
         else:
             CE_weight = 1.
-        
+        idxs = concat_all_gather(idxs)
         # update key features and corresponding pseudo labels
-        model.update_memory(feats_k, pseudo_labels_w, labels)
+        model.update_memory(epoch, idxs, feats_k, pseudo_labels_w, labels)
 
 
         # add cluster contrastive los s
@@ -744,8 +747,8 @@ def train_epoch_twin(train_loader, model, banks, confidence,
         # moco instance discrimination
         loss_ins, accuracy_ins = instance_loss(
             logits_ins=logits_ins,
-            pseudo_labels=pseudo_labels_w,
-            mem_labels=model.mem_labels,
+            pseudo_labels=model.mem_labels[idxs],
+            mem_labels=model.mem_labels[model.idxs],
             contrast_type=args.learn.contrast_type,
         )
         # instance accuracy shown for only one process to give a rough idea
@@ -850,7 +853,7 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
 
         feats_q, logits_q, logits_ins, keys, logits_k = model(images_q, images_k)
         # update key features and corresponding pseudo labels
-        model.update_memory(keys, pseudo_labels_w, labels)
+        model.update_memory(epoch, idxs, keys, pseudo_labels_w, labels)
 
         # instance similarity loss
         if args.learn.use_sim_regular:
@@ -881,8 +884,8 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
         # moco instance discrimination
         loss_ins, accuracy_ins = instance_loss(
             logits_ins=logits_ins,
-            pseudo_labels=pseudo_labels_w,
-            mem_labels=model.mem_labels,
+            pseudo_labels=model.mem_labels[idxs],
+            mem_labels=model.mem_labels[model.idxs],
             contrast_type=args.learn.contrast_type,
         )
         # instance accuracy shown for only one process to give a rough idea
@@ -981,7 +984,11 @@ def instance_loss(logits_ins, pseudo_labels, mem_labels, contrast_type):
         mask = torch.ones_like(logits_ins, dtype=torch.bool)
         mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
         logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-
+    elif contrast_type == "temperal_aware" and pseudo_labels is not None:
+        mask = torch.ones_like(logits_ins, dtype=torch.bool)
+        mask[:, 1:] = torch.all(pseudo_labels.unsqueeze(1) != mem_labels.unsqueeze(0), dim=2)  # (B, K)
+        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
+        
     loss = F.cross_entropy(logits_ins, labels_ins)
 
     accuracy = calculate_acc(logits_ins, labels_ins)

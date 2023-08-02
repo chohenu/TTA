@@ -16,6 +16,7 @@ datasets/
 thrid_party/Twin-Contrastive-Learning/save
 thrid_party/Twin-Contrastive-Learning/datasets
 thrid_party/TCL/dataset
+thrid_party/Guiding-Pseudo-labels-with-Uncertainty-Estimation-for-Source-free-Unsupervised-Domain-Adaptation
 
 AdaContrast/checkpoint
 AdaContrast/output

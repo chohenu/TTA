@@ -1,7 +1,7 @@
-SRC_MODEL_DIR="/opt/tta/AdaContrast/checkpoint/VISDA-C/"
+SRC_MODEL_DIR="/opt/tta/AdaContrast/output/VISDA-C/source"
 
 PORT=10005
-MEMO="confidence2knn"
+MEMO="temporal_contrast"
 SUB_MEMO="baseline"
 
 # for SEED in 2020 2021 2022
