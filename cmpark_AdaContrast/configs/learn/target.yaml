@@ -1,0 +1,38 @@
+# loop logistics
+epochs: 15
+start_epoch: 0
+print_freq: 10
+
+# loss
+contrast_type: "class_aware"
+ce_type: "reduction_none" # ["standard", "reduction_none"]
+alpha: 1.0
+beta: 1.0
+eta: 1.0
+add_cluster_loss : false
+use_momory_bank : False
+add_gt_in_bank : True
+use_sim_regular : false
+add_mixup_loss : False
+
+# algo-related stuff
+aug_versions: "wss" # ["w", "ws", "wss", "ss"]
+dist_type: "cosine" # ["cosine", "euclidean"]
+ce_sup_type: "weak_strong" # ["weak_all", "weak_weak", "weak_strong", "conb_strong_strong"]
+refine_method: "nearest_neighbors_fixmatch" #["conf_based_nearest_neighbors", "gmm"]
+num_neighbors: 10
+queue_size: -1
+epoch_labeling: false
+
+# For Noisy Detector
+
+do_noise_detect: False
+use_ce_weight: True
+
+use_projector_q: False
+use_classfier_q: False
+sep_gmm: False
+
+# Fro vislized
+return_index : true
+gmm : true

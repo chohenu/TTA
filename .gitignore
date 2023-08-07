@@ -28,7 +28,13 @@ classification/.ipynb_checkpoints/
 classification/models/.ipynb_checkpoints/
 classification/*.ipynb
 
-
+## cmpark logging
 AdaContrast/clustering/
 select/domainnet-126/
 select/VISDA-C/
+cmpark_AdaContrast/checkpoint
+cmpark_AdaContrast/debug/
+cmpark_AdaContrast/clustering
+debug/VISDA-C/
+cmpark_AdaContrast/notebook/
+cmpark_AdaContrast/.ipynb_checkpoints
