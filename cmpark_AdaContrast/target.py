@@ -147,6 +147,8 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         "probs": probs[rand_idxs][: args.learn.queue_size],
         "logit": logits[rand_idxs][: args.learn.queue_size],
         "ptr": 0,
+        "noram_features": F.normalize(features[rand_idxs][: args.learn.queue_size]),
+
     }
     if args.learn.add_gt_in_bank: 
         banks.update({"gt": gt_labels[rand_idxs]})
@@ -525,21 +527,73 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
             weak_prob_orig = F.softmax(weak_prob_orig / st, dim=1)
             
             loss_sim = torch.sum(-strong_prob.detach() * torch.log(weak_prob_orig),dim=-1).mean()
-            
-        # moco instance discrimination
-        loss_ins, accuracy_ins = instance_loss(
-            logits_ins=logits_ins,
-            pseudo_labels=pseudo_labels_w,
-            mem_labels=model.mem_labels,
-            contrast_type=args.learn.contrast_type,
-        )
-        # instance accuracy shown for only one process to give a rough idea
-        top1_ins.update(accuracy_ins.item(), len(logits_ins))
+        
+        if args.learn.ada_sfda and args.model_tta.type == 'moco':
+            with torch.no_grad():
+                output_f_norm = F.normalize(feats_q)
+                output_f_ = output_f_norm
+                softmax_out = nn.Softmax(dim=1)(logits_q)
 
-        # classification
-        loss_cls, accuracy_psd = classification_loss(
-            logits_w, logits_q, pseudo_labels_w, None, args
-        )
+                pred_bs = softmax_out
+
+                origin_idx = banks['index'][idxs]
+                banks['noram_features'][origin_idx] = output_f_
+                banks['probs'][origin_idx] = softmax_out
+
+                distance = output_f_ @ banks['noram_features'].T
+                _, idx_near = torch.topk(distance, dim=-1, largest=True, k=5 + 1)
+                idx_near = idx_near[:, 1:]  # batch x K
+                score_near = banks['probs'][idx_near]  # batch x K x C
+
+            # nn
+            softmax_out_un = softmax_out.unsqueeze(1).expand(
+                -1, 5, -1
+            )  # batch x K x C
+
+            loss_ins = torch.mean(
+                (F.kl_div(softmax_out_un, score_near, reduction="none").sum(-1)).sum(1)
+            ) # Equal to dot product
+
+            mask = torch.ones((images_q.shape[0], images_q.shape[0]))
+            diag_num = torch.diag(mask)
+            mask_diag = torch.diag_embed(diag_num)
+            mask = mask - mask_diag
+            ## peu
+            # pseudo_labels_w
+da             one_hot_vector = torch.eye(12).cuda()[pseudo_labels_w] ## 64,12
+            filtering_mask = one_hot_vector @ one_hot_vector.T # 64,12 & 12,64 -> 64x64
+            mask *= 1-filtering_mask
+
+            copy = softmax_out.T  # .detach().clone()#
+
+            dot_neg = softmax_out @ copy  # batch x batch
+
+            dot_neg = (dot_neg * mask.cuda()).sum(-1)  # batch
+            neg_pred = torch.mean(dot_neg)
+            loss_ins += neg_pred * 1
+            
+            # accuracy_ins = calculate_acc(softmax_out.argmax(dim=1), pseudo_labels_w)
+            accuracy_ins = (softmax_out.argmax(dim=1) == pseudo_labels_w).float().mean() * 100
+            top1_ins.update(accuracy_ins.item(), len(logits_ins))
+
+        else:
+            # moco instance discrimination
+            loss_ins, accuracy_ins = instance_loss(
+                logits_ins=logits_ins,
+                pseudo_labels=pseudo_labels_w,
+                mem_labels=model.mem_labels,
+                contrast_type=args.learn.contrast_type,
+            )
+            # instance accuracy shown for only one process to give a rough idea
+            top1_ins.update(accuracy_ins.item(), len(logits_ins))
+
+        if args.learn.use_ce:
+            # classification
+            loss_cls, accuracy_psd = classification_loss(
+                logits_w, logits_q, pseudo_labels_w, None, args
+            )
+        else: 
+            loss_cls, accuracy_psd = torch.zeros(1),torch.zeros(1)
 
         if args.learn.gmm: 
             _, center_sim = banks['gmm'](banks['features'], banks['index'], idxs)
@@ -548,7 +602,6 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
                 momemtum_sim = torch.matmul(keys, center_sim.T)
                 strong_sim = torch.matmul(feats_q, center_sim.T)
                 weak_sim = torch.matmul(feats_w, center_sim.T)
-                print('berkpoint()')
 
         if args.model_tta.type == 'mixco': loss_mixco = mixcoloss(logits_mix, mix_label)
 
@@ -562,11 +615,11 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
         )
 
         loss = (
-            args.learn.alpha * loss_cls
-            + args.learn.beta * loss_ins
+            args.learn.beta * loss_ins
             + args.learn.eta * loss_div
         )
 
+        if args.learn.use_ce: loss += args.learn.alpha * loss_cls
         if args.model_tta.type == 'mixco': loss += loss_mixco
         if args.learn.use_sim_regular: loss += loss_sim
         if args.learn.add_mixup_loss: loss+= loss_mix
@@ -585,12 +638,12 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
 
         if use_wandb(args):
             wandb_dict = {
-                "loss_cls": args.learn.alpha * loss_cls.item(),
                 "loss_ins": args.learn.beta * loss_ins.item(),
                 "loss_div": args.learn.eta * loss_div.item(),
                 "acc_ins": accuracy_ins.item(),
             }
 
+            if args.learn.use_ce: wandb_dict.update({"loss_cls": args.learn.alpha * loss_cls.item()})
             if args.model_tta.type == 'mixco': wandb_dict.update({"loss_mixco":loss_mixco.item()})
             if args.learn.use_sim_regular: wandb_dict.update({'loss_sim': loss_sim.item()})
             if args.learn.add_mixup_loss: wandb_dict.update({'loss_mix': loss_mix.item()})
