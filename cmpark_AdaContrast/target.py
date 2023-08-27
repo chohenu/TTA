@@ -15,7 +15,7 @@ import wandb
 import numpy as np
 
 from classifier import Classifier
-from image_list import ImageList, mixup_data
+from image_list import ImageList, mixup_data, list_mixup_data
 from moco.builder import AdaMoCo, MixCo
 from moco.loader import NCropsTransform
 from utils import (
@@ -33,7 +33,7 @@ from utils import (
     get_tsne_map,
 )
 
-from pseudo_label import refine_predictions, CenterGMM
+from pseudo_label import refine_predictions, CenterGMM, noise_detect
 from losses import *
 import random
 import pickle
@@ -61,11 +61,16 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
     # run inference
     logits, gt_labels, indices, cluster_labels = [], [], [], []
     features, project_feats = [], []
+    cropping = True
+    c_features, c_logits = [], []
+    if args.learn.add_mixup_loss: mix_feats, shuffle_index, shuffle_lam= [], [], []
     logging.info("Eval and labeling...")
     iterator = tqdm(dataloader) if is_master(args) else dataloader
-    for imgs, labels, idxs in iterator:
-        imgs = imgs.to("cuda")
-
+    for i, data in enumerate(iterator):
+        images, labels, idxs = data
+        idxs = idxs.to("cuda")
+        imgs = images[0].to("cuda")
+            
         # (B, D) x (D, K) -> (B, K)
         feats, logits_cls = model(imgs, cls_only=True)
 
@@ -75,6 +80,25 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         logits.append(logits_cls)
         gt_labels.append(labels)
         indices.append(idxs)
+        
+        if cropping: 
+            crop_imgs = images[1].to("cuda")
+            c_feats, c_logits_cls = model(crop_imgs, cls_only=True)
+            c_features.append(c_feats)
+            c_logits.append(c_logits_cls)
+        
+        if args.learn.add_mixup_loss:
+            # alpha = 0.4
+            alpha = 1
+            inputs, targets_a, targets_b, lam, index = mixup_data(x=imgs, y=labels, x_t=None,
+                                                            alpha=alpha, use_cuda=False)
+            inputs, targets_a, targets_b = map(Variable, (inputs,
+                                                        targets_a, targets_b))
+
+            feats_mix,_ = model(inputs, cls_only=True)
+            mix_feats.append(feats_mix)
+            shuffle_index.append(idxs[index])
+            shuffle_lam.append(torch.Tensor(np.repeat(lam,imgs.size(0))))
 
     features = torch.cat(features)
     # project_feats  = torch.cat(project_feats)
@@ -82,6 +106,10 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
     logits = torch.cat(logits)
     gt_labels = torch.cat(gt_labels).to("cuda")
     indices = torch.cat(indices).to("cuda")
+    
+    if cropping: c_features, c_logits = torch.cat(c_features), torch.cat(c_logits)
+
+    if args.learn.add_mixup_loss: mix_feats, shuffle_index, shuffle_lam = torch.cat(mix_feats), torch.cat(shuffle_index).to("cuda"), torch.cat(shuffle_lam).to('cuda')
 
     if args.distributed:
         # gather results from all ranks
@@ -91,6 +119,9 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         logits = concat_all_gather(logits)
         gt_labels = concat_all_gather(gt_labels)
         indices = concat_all_gather(indices)
+        if args.learn.add_mixup_loss: mix_feats, shuffle_index, shuffle_lam = concat_all_gather(mix_feats), concat_all_gather(shuffle_index),  concat_all_gather(shuffle_lam)
+        if cropping: c_features, c_logits = concat_all_gather(c_features), concat_all_gather(c_logits)
+        
 
         # remove extra wrap-arounds from DDP
         ranks = len(dataloader.dataset) % dist.get_world_size()
@@ -100,6 +131,8 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         logits = remove_wrap_arounds(logits, ranks)
         gt_labels = remove_wrap_arounds(gt_labels, ranks)
         indices = remove_wrap_arounds(indices, ranks)
+        if args.learn.add_mixup_loss: mix_feats, shuffle_index, shuffle_lam = remove_wrap_arounds(mix_feats, ranks), remove_wrap_arounds(shuffle_index, ranks), remove_wrap_arounds(shuffle_lam, ranks)
+        if cropping: c_features, c_logits = remove_wrap_arounds(c_features, ranks), remove_wrap_arounds(c_logits, ranks)
 
     assert len(logits) == len(dataloader.dataset)
     pred_labels = logits.argmax(dim=1)
@@ -113,41 +146,36 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         )
         wandb_dict["Test Avg"] = acc_per_class.mean()
         wandb_dict["Test Per-class"] = acc_per_class
-        class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 'Horse', 'Knife', 'Motorcycle', 'Person', 'Plant', 'Skateboard', 'Train', 'Truck']
+        class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 
+              'Horse', 'Knife', 'Motorcycle', 'Person', 
+              'Plant', 'Skateboard', 'Train', 'Truck']
         class_dict = {idx:name[:3]for idx, name in enumerate(class_name)}
 
-    if epoch > -1: ## wandb logging Error image
-        num_images = 10
-        y_true, y_pred = gt_labels.cpu().numpy(), pred_labels.cpu().numpy()
-        diff_ = y_true != y_pred
-        diff_y_true, diff_y_pred, diff_indices = y_true[diff_], y_pred[diff_], indices[diff_]
-        class_num ,idx = np.unique(diff_y_true, return_inverse = True)
-        for i,cls_name in zip(class_num,class_name):
-            class_diff_index = diff_indices[idx==i][:num_images]
-            diff_class = diff_y_pred[idx==i][:num_images]
-            diff_class = np.array([class_dict[i] for i in diff_class])
-            image_list = [dataloader.dataset.__getitem__(i)[0] for i in class_diff_index]
-            wandb_dict.update({f'Error_class_{cls_name}':wandb.Image(
-                                            torch.concat(image_list,dim=2),
-                                            caption=f"Diff_class_{np.array2string(diff_class)}")
-                                            })
-
-
-    if False: 
-        import os
-        base_path = os.getcwd()
-        logging.info(f"Saving Memory Bank : {base_path}")
-        with open(f'{base_path}/val_{model.queue_ptr}.pickle','wb') as fw:
-            pickle.dump(model.return_membank, fw)
+    # if epoch > -1: ## wandb logging Error image
+    #     num_images = 10
+    #     y_true, y_pred = gt_labels.cpu().numpy(), pred_labels.cpu().numpy()
+    #     diff_ = y_true != y_pred
+    #     diff_y_true, diff_y_pred, diff_indices = y_true[diff_], y_pred[diff_], indices[diff_]
+    #     class_num ,idx = np.unique(diff_y_true, return_inverse = True)
+    #     for i,cls_name in zip(class_num,class_name):
+    #         class_diff_index = diff_indices[idx==i][:num_images]
+    #         diff_class = diff_y_pred[idx==i][:num_images]
+    #         diff_class = np.array([class_dict[i] for i in diff_class])
+    #         image_list = [dataloader.dataset.__getitem__(i)[0] for i in class_diff_index]
+    #         wandb_dict.update({f'Error_class_{cls_name}':wandb.Image(
+    #                                         torch.concat(image_list,dim=2),
+    #                                         caption=f"Diff_class_{np.array2string(diff_class)}")
+    #                                         })
 
     probs = F.softmax(logits, dim=1)
     rand_idxs = torch.randperm(len(features)).cuda()
+    
     banks = {
         "features": features[rand_idxs][: args.learn.queue_size],
         "probs": probs[rand_idxs][: args.learn.queue_size],
         "logit": logits[rand_idxs][: args.learn.queue_size],
         "ptr": 0,
-        "noram_features": F.normalize(features[rand_idxs][: args.learn.queue_size]),
+        "norm_features": F.normalize(features[rand_idxs][: args.learn.queue_size]),
 
     }
     if args.learn.add_gt_in_bank: 
@@ -155,10 +183,30 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
 
     if args.learn.return_index: 
         banks.update({"index": indices[rand_idxs]})
+        reverse_index = torch.where(torch.range(0,len(indices)).reshape(-1,1)==indices[rand_idxs].cpu())[1]
+        banks.update({"re_index": reverse_index})
 
     if args.learn.gmm: 
         banks.update({"gmm": CenterGMM(banks['features'], banks['probs'], banks, args)})
-        
+
+    if args.learn.add_mixup_loss:
+        banks.update({"mix_feats": mix_feats[rand_idxs]})
+        banks.update({"s_index": shuffle_index[rand_idxs]})
+        banks.update({'lam': shuffle_lam[rand_idxs]})
+
+    if cropping : 
+        c_probs = F.softmax(c_logits, dim=1)
+        banks.update({"c_probs": c_probs[rand_idxs][: args.learn.queue_size]})
+        banks.update({"c_features": c_features[rand_idxs][: args.learn.queue_size]})
+    
+    if False and is_master(args): 
+        import os
+        save_dir = str(wandb.run.dir)
+        logging.info(f"Saving Memory Bank : {save_dir}")
+        with open(f'{save_dir}/mix_val_{epoch}.pickle','wb') as fw:
+            pickle.dump(banks, fw)
+
+
     confidence, context_assignments, centers = None, None, None
     # refine predicted labels
     if args.learn.do_noise_detect:
@@ -227,38 +275,12 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
     if use_wandb(args):
         wandb.log(wandb_dict)
 
+
     return pseudo_item_list, banks, confidence, context_assignments, centers
 
 
-def noise_detect(cluster_labels, labels, features, args, temp=0.25):
-    labels = labels.long()
-    centers = F.normalize(cluster_labels.T.mm(features), dim=1)
-    context_assigments_logits = features.mm(centers.T) / temp
-    context_assigments = F.softmax(context_assigments_logits, dim=1)
-    losses = - context_assigments[torch.arange(labels.size(0)), labels]
-    losses = losses.cpu().numpy()[:, np.newaxis]
-    losses = (losses - losses.min()) / (losses.max() - losses.min())
-    labels = labels.cpu().numpy()
-    
-    from sklearn.mixture import GaussianMixture
-    confidence = np.zeros((losses.shape[0],))
-    if args.learn.sep_gmm:
-        for i in range(cluster_labels.size(1)):
-            mask = labels == i
-            c = losses[mask, :]
-            gm = GaussianMixture(n_components=2, random_state=2).fit(c)
-            pdf = gm.predict_proba(c)
-            # label이 얼마나 clean한지 정량적으로 표현
-            confidence[mask] = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(gm.means_)]
-    else:
-        gm = GaussianMixture(n_components=2, random_state=0).fit(losses)
-        pdf = gm.predict_proba(losses)
-        confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(gm.means_)]
-    confidence = torch.from_numpy(confidence).float().cuda()
-    return confidence, context_assigments, centers
-
 @torch.no_grad()
-def update_labels(banks, idxs, features, logits, labels, args):
+def update_labels(banks, idxs, features, logits, features_c, logits_c, labels, args):
     # 1) avoid inconsistency among DDP processes, and
     # 2) have better estimate with more data points
     if args.distributed:
@@ -266,8 +288,12 @@ def update_labels(banks, idxs, features, logits, labels, args):
         features = concat_all_gather(features)
         logits = concat_all_gather(logits)
         labels = concat_all_gather(labels.to("cuda"))
+        features_c = concat_all_gather(features_c)
+        logits_c = concat_all_gather(logits_c)
+        
 
     probs = F.softmax(logits, dim=1)
+    c_probs = F.softmax(logits_c, dim=1)
 
     start = banks["ptr"]
     end = start + len(idxs)
@@ -276,23 +302,34 @@ def update_labels(banks, idxs, features, logits, labels, args):
     banks["probs"][idxs_replace, :] = probs
     banks["logit"][idxs_replace, :] = logits
     banks["ptr"] = end % len(banks["features"])
+    banks['norm_features'][idxs_replace, :] = F.normalize(features)
+    banks["c_features"][idxs_replace, :] = features_c
+    banks["c_probs"][idxs_replace, :] = c_probs
+    
 
     if args.learn.add_gt_in_bank:
         banks['gt'][idxs_replace] = labels
 
 
-def get_augmentation_versions(args):
+def get_augmentation_versions(args, train=True):
     """
     Get a list of augmentations. "w" stands for weak, "s" stands for strong.
 
     E.g., "wss" stands for one weak, two strong.
     """
     transform_list = []
-    for version in args.learn.aug_versions:
+    aug_verions = args.learn.aug_versions if train else args.learn.val_aug_versions
+    for version in aug_verions:
         if version == "s":
             transform_list.append(get_augmentation(args.data.aug_type))
         elif version == "w":
             transform_list.append(get_augmentation("plain"))
+        elif version == "o":
+            transform_list.append(get_augmentation("test"))
+        elif version == "c":
+            transform_list.append(get_augmentation("rand_crop"))
+        elif version == "f":
+            transform_list.append(get_augmentation("five_crop"))
         else:
             raise NotImplementedError(f"{version} version not implemented.")
     transform = NCropsTransform(transform_list)
@@ -321,7 +358,7 @@ def get_target_optimizer(model, args):
                 },
                 {
                     "params": extra_params,
-                    "lr": args.optim.lr * 10,
+                    lr": args.optim.lr * 10,
                     "momentum": args.optim.momentum,
                     "weight_decay": args.optim.weight_decay,
                     "nesterov": args.optim.nesterov,
@@ -383,7 +420,8 @@ def train_target_domain(args):
         model = CustomDistributedDataParallel(model, device_ids=[args.gpu])
     logging.info(f"1 - Created target model")
 
-    val_transform = get_augmentation("test")
+    # val_transform = get_augmentation("test")
+    val_transform = get_augmentation_versions(args, train=False)
     label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_list.txt")
     val_dataset = ImageList(
         image_root=args.data.image_root,
@@ -403,12 +441,12 @@ def train_target_domain(args):
     
     args.num_clusters = model.src_model.num_classes
     # Training data
-    train_transform = get_augmentation_versions(args)
+    train_transform = get_augmentation_versions(args, train=True)
     train_dataset = ImageList(
         image_root=args.data.image_root,
-        label_file=None,  # uses pseudo labels
+        label_file=label_file,  # uses pseudo labels
         transform=train_transform,
-        pseudo_item_list=pseudo_item_list,
+        # pseudo_item_list=pseudo_item_list,
     )
     train_sampler = DistributedSampler(train_dataset) if args.distributed else None
     train_loader = DataLoader(
@@ -436,11 +474,11 @@ def train_target_domain(args):
         train_epoch(train_loader, model, banks, optimizer, epoch, args)
         eval_and_label_dataset(val_loader, model, banks, epoch, args)
 
-    if is_master(args):
-        filename = f"checkpoint_{epoch:04d}_{args.data.src_domain}-{args.data.tgt_domain}-{args.sub_memo}_{args.seed}.pth.tar"
-        save_path = os.path.join(args.log_dir, filename)
-        save_checkpoint(model, optimizer, epoch, save_path=save_path)
-        logging.info(f"Saved checkpoint {save_path}")
+        if is_master(args):
+            filename = f"checkpoint_{epoch:04d}_{args.data.src_domain}-{args.data.tgt_domain}-{args.sub_memo}_{args.seed}.pth.tar"
+            save_path = os.path.join(args.log_dir, filename)
+            save_checkpoint(model, optimizer, epoch, save_path=save_path)
+            logging.info(f"Saved checkpoint {save_path}")
             
 def train_epoch(train_loader, model, banks, optimizer, epoch, args):
     batch_time = AverageMeter("Time", ":6.3f")
@@ -467,6 +505,8 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
             images[1].to("cuda"),
             images[2].to("cuda"),
         )
+        images_c = images[3].to("cuda")
+        feats_c, logits_c = model(images_c, cls_only=True)
 
         # per-step scheduler
         step = i + epoch * len(train_loader)
@@ -482,26 +522,42 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
         # make center embedding 
 
         if args.learn.add_mixup_loss:
-            # alpha = 0.4
-            alpha = round(random.random(),1)
-            inputs, targets_a, targets_b, lam = mixup_data(images_w, pseudo_labels_w,
-                                                            alpha, use_cuda=True)
+            alpha = 1
+            if True: 
+                output_f_ = F.normalize(feats_w)
+                softmax_out = nn.Softmax(dim=1)(logits_w)
+                origin_idx = torch.where(idxs.reshape(-1,1)==banks['index'])[1]
+                distance = output_f_ @ banks['norm_features'].T
+                _, idx_near = torch.topk(distance, dim=-1, largest=False, k=5 + 1) # get 
+                idx_near = idx_near[:, 0]  # far sample
+
+                far_idex = banks['index'][idx_near]
+                targets_b = banks['probs'][idx_near].argmax(1)
+                targets_a = pseudo_labels_w
+                far_images_w = torch.cat([train_loader.dataset.__getitem__(i)[0][0].unsqueeze(0).to('cuda') for i in far_idex])
+                
+                lam = np.random.beta(alpha, alpha)
+                inputs = lam * images_w + (1 - lam) * far_images_w
+
+            if False:                 
+                inputs, targets_a, targets_b, lam, index = mixup_data(x=images_w, y=pseudo_labels_w, x_t=None,
+                                                                alpha=alpha, use_cuda=True)
+
             inputs, targets_a, targets_b = map(Variable, (inputs,
                                                         targets_a, targets_b))
 
+
             _,logit_mix = model(inputs, cls_only=True)
             loss_mix = mixup_criterion(logit_mix, targets_a, targets_b, lam)
-                
-
+            accuracy_psd = calculate_acc(logits_w, pseudo_labels_w)
+            
         if args.model_tta.type == 'moco': 
             feats_q, logits_q, logits_ins, keys, logits_k = model(images_q, images_k)
         elif args.model_tta.type == 'mixco':
             feats_q, logits_q, logits_mix, mix_label, logits_ins, keys, logits_k = model(images_q, images_k)
 
-
         # update key features and corresponding pseudo labels
-        model.update_memory(keys, pseudo_labels_w, labels)
-
+        model.update_memory(keys, pseudo_labels_w, labels, logits_k)
         # instance similarity loss
         if args.learn.use_sim_regular:
             tt = 0.1
@@ -516,7 +572,7 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
             strong_prob = F.softmax(strong_prob / tt, dim=1)
 
             factor = prob_ku_orig.gather(1, pseudo_labels_w.unsqueeze(1).expand([batch_u, -1])) 
-            strong_prob = strong_prob * factor # similarity smoothing
+            strong_prob = strong_prob * factor # similarity smoothin
             strong_prob /= torch.sum(strong_prob, dim=1, keepdim=True)
 
             ## weak 
@@ -536,11 +592,12 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
 
                 pred_bs = softmax_out
 
-                origin_idx = banks['index'][idxs]
-                banks['noram_features'][origin_idx] = output_f_
+                # origin_idx = banks['re_index'][idxs]
+                origin_idx = torch.where(idxs.reshape(-1,1)==banks['index'])[1]
+                banks['norm_features'][origin_idx] = output_f_
                 banks['probs'][origin_idx] = softmax_out
 
-                distance = output_f_ @ banks['noram_features'].T
+                distance = output_f_ @ banks['norm_features'].T
                 _, idx_near = torch.topk(distance, dim=-1, largest=True, k=5 + 1)
                 idx_near = idx_near[:, 1:]  # batch x K
                 score_near = banks['probs'][idx_near]  # batch x K x C
@@ -554,22 +611,36 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
                 (F.kl_div(softmax_out_un, score_near, reduction="none").sum(-1)).sum(1)
             ) # Equal to dot product
 
-            mask = torch.ones((images_q.shape[0], images_q.shape[0]))
-            diag_num = torch.diag(mask)
-            mask_diag = torch.diag_embed(diag_num)
-            mask = mask - mask_diag
-            ## peu
-            # pseudo_labels_w
-da             one_hot_vector = torch.eye(12).cuda()[pseudo_labels_w] ## 64,12
-            filtering_mask = one_hot_vector @ one_hot_vector.T # 64,12 & 12,64 -> 64x64
-            mask *= 1-filtering_mask
+            use_batch_mask = False
+            if use_batch_mask:
+                mask = torch.ones((images_q.shape[0], images_q.shape[0])).cuda()
+                diag_num = torch.diag(mask)
+                mask_diag = torch.diag_embed(diag_num)
+                mask = mask - mask_diag
+                ## peu
+                # pseudo_labels_w
+                neg_filter = False
+                if neg_filter: 
+                    one_hot_vector = torch.eye(12).cuda()[pseudo_labels_w] ## 64,12
+                    filtering_mask = one_hot_vector @ one_hot_vector.T # 64,12 & 12,64 -> 64x64
+                    mask *= 1-filtering_mask
 
-            copy = softmax_out.T  # .detach().clone()#
+                copy = softmax_out.T  # .detach().clone()#
 
-            dot_neg = softmax_out @ copy  # batch x batch
+                dot_neg = softmax_out @ copy  # batch x batch
 
-            dot_neg = (dot_neg * mask.cuda()).sum(-1)  # batch
-            neg_pred = torch.mean(dot_neg)
+                dot_neg = (dot_neg * mask.cuda()).sum(-1)  # batch
+                neg_pred = torch.mean(dot_neg)
+
+            else: 
+                
+                logit_neg_inx = softmax_out @ F.softmax(model.mem_prob, dim=1)
+                mask = torch.ones_like(logit_neg_inx, dtype=torch.bool)
+                mask = pseudo_labels_w.reshape(-1, 1) != model.mem_labels  # (B, K)
+                dot_neg = torch.where(mask, logit_neg_inx, torch.tensor([torch.nan]).cuda())
+                dot_neg = dot_neg.nansum(-1)
+                neg_pred = torch.mean(dot_neg)
+
             loss_ins += neg_pred * 1
             
             # accuracy_ins = calculate_acc(softmax_out.argmax(dim=1), pseudo_labels_w)
@@ -592,17 +663,28 @@ da             one_hot_vector = torch.eye(12).cuda()[pseudo_labels_w] ## 64,12
             loss_cls, accuracy_psd = classification_loss(
                 logits_w, logits_q, pseudo_labels_w, None, args
             )
-        else: 
-            loss_cls, accuracy_psd = torch.zeros(1),torch.zeros(1)
+        else:
+            pass
+            # if args.learn.gmm: 
+            #     _, center_sim = banks['gmm'](banks['features'], banks['index'], idxs) # B,F
+            #     # there is three type similiary 
+            #     # momemtum_sim = torch.matmul(keys, center_sim.T)
+            #     # strong_sim = torch.matmul(feats_q, center_sim.T)
+            #     alpha = 1
+            #     weak_sim = F.normalize(torch.matmul(feats_w, center_sim.T),dim=1) # B,F x F,12 = B, 12
 
-        if args.learn.gmm: 
-            _, center_sim = banks['gmm'](banks['features'], banks['index'], idxs)
-            # there is three type similiary 
-            if epoch == 2: 
-                momemtum_sim = torch.matmul(keys, center_sim.T)
-                strong_sim = torch.matmul(feats_q, center_sim.T)
-                weak_sim = torch.matmul(feats_w, center_sim.T)
-
+            #     inputs, targets_a, targets_b, lam, index = list_mixup_data(x=images_w, y=pseudo_labels_w, x_t=None,
+            #                                                     alpha=alpha, use_cuda=True, sim=weak_sim)
+            #     inputs, targets_a, targets_b = map(Variable, (inputs,
+            #                                                 targets_a, targets_b))
+                
+            #     _,logit_mix = model(inputs, cls_only=True)
+            #     loss_mix_a = lam.reshape(-1) * F.cross_entropy(logit_mix, targets_a, reduce='none')
+            #     loss_mix_b = (1 - lam.reshape(-1)) * F.cross_entropy(logit_mix, targets_b, reduce='none')
+            #     loss_cls = loss_mix_a + loss_mix_b
+            #     loss_cls = loss_cls.mean()
+            #     accuracy_psd = calculate_acc(logits_w, pseudo_labels_w)
+                
         if args.model_tta.type == 'mixco': loss_mixco = mixcoloss(logits_mix, mix_label)
 
         top1_psd.update(accuracy_psd.item(), len(logits_w))
@@ -634,7 +716,7 @@ da             one_hot_vector = torch.eye(12).cuda()[pseudo_labels_w] ## 64,12
         with torch.no_grad():
             feats_w, logits_w = model.momentum_model(images_w, return_feats=True)
 
-        update_labels(banks, idxs, feats_w, logits_w, labels, args)
+        update_labels(banks, idxs, feats_w, logits_w, feats_c, logits_c, labels, args)
 
         if use_wandb(args):
             wandb_dict = {
