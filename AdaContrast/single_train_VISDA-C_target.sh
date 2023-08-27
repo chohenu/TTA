@@ -5,8 +5,8 @@ MEMO="target"
 
 for SEED in 2020
 do
-    python main_adacontrast.py \
-    seed=${SEED} port=${PORT} memo=${MEMO} project="VISDA-C" \
+    CUDA_VISIBLE_DEVICES=3,5,7 python main_adacontrast.py \
+    seed=${SEED} port=${PORT} memo=${MEMO} project="VISDA-C_ORIGIN" \
     data.data_root="/mnt/data/" data.workers=8 \
     data.dataset="VISDA-C" data.source_domains="[train]" data.target_domains="[validation]" \
     model_src.arch="resnet101" \

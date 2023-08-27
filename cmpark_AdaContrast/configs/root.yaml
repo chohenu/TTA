@@ -16,7 +16,7 @@ memo: test
 sub_memo: null
 project: null
 use_wandb: True
-
+log_dir : './save_check'
 # Modular settings
 defaults:
   - model_src: basic

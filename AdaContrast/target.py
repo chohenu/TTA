@@ -156,6 +156,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
 
     confidence, context_assignments, centers = None, None, None
     # refine predicted labels
+    estimated_clean_ratio = None
     if args.learn.do_noise_detect:
         logging.info(
             "Do Noise Detection"
@@ -182,7 +183,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
     pred_labels, _, acc, top_k_index = refine_predictions(
             features, probs, banks, args=args, gt_labels=gt_labels, return_index=args.learn.return_index
     )
-    
+
     if args.learn.return_index and args.learn.refine_method == "nearest_neighbors_fixmatch":
         if epoch > -1:
             select_index = 3
@@ -222,7 +223,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
     if use_wandb(args):
         wandb.log(wandb_dict)
 
-    return pseudo_item_list, banks, confidence, context_assignments, centers, estimated_clean_ratio
+    return pseudo_item_list, banks, confidence, context_assignments, centers
 
 
 @torch.no_grad()
@@ -491,12 +492,19 @@ def refine_predictions(
         gm = GMM_clustering(
             features, feature_bank, probs_bank, 
             args)        
-    elif args.learn.refine_method is None:
+    elif args.learn.refine_method == None:
+        # feature_bank = banks["features"]
+        # probs = banks["probs"]
         pred_labels = probs.argmax(dim=1)
+        stack_index = None
     else:
-        raise NotImplementedError(
-            f"{args.learn.refine_method} refine method is not implemented."
-        )
+        # feature_bank = banks["features"]
+        # probs = banks["probs"]
+        pred_labels = probs.argmax(dim=1)
+        stack_index = None
+        # raise NotImplementedError(
+        #     f"{args.learn.refine_method} refine method is not implemented."
+        # )
     accuracy = None
     if gt_labels is not None:
         accuracy = (pred_labels == gt_labels).float().mean() * 100

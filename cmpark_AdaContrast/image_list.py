@@ -73,7 +73,36 @@ class ImageList(Dataset):
     def __len__(self):
         return len(self.item_list)
 
-def mixup_data(x, y, alpha=1.0, use_cuda=True):
+def list_mixup_data(x, y, x_t=None, alpha=None, use_cuda=True, sim=None):
+    '''Returns mixed inputs, pairs of targets, and lambda'''
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+
+    
+    batch_size = x.size()[0]
+    lam_list = torch.Tensor(np.repeat(lam,batch_size)).reshape(-1,1,1,1).cuda()
+
+    if use_cuda:
+        index = torch.randperm(batch_size).cuda()
+    else:
+        index = torch.randperm(batch_size)
+
+    # filter_same_class = y == y[index] ## cond1
+    # filter_same_sim = sim.argmax(1) == sim[index].argmax(1) ## cond2
+    # filter_index = filter_same_class ## cond1 and cond2 always true
+    filter_index = y == sim.argmax(1)
+    
+    lam_list[filter_index] = 1
+
+    target_x = x if x_t == None else x_t
+    mixed_x = lam_list * x + (1 - lam_list) * target_x[index, :]
+
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam_list, index
+
+def mixup_data(x, y, x_t=None, alpha=None, use_cuda=True):
     '''Returns mixed inputs, pairs of targets, and lambda'''
     if alpha > 0:
         lam = np.random.beta(alpha, alpha)
@@ -85,7 +114,10 @@ def mixup_data(x, y, alpha=1.0, use_cuda=True):
         index = torch.randperm(batch_size).cuda()
     else:
         index = torch.randperm(batch_size)
+    
+    target_x = x if x_t == None else x_t
+    mixed_x = lam * x + (1 - lam) * target_x[index, :]
 
-    mixed_x = lam * x + (1 - lam) * x[index, :]
     y_a, y_b = y, y[index]
-    return mixed_x, y_a, y_b, lam
+    return mixed_x, y_a, y_b, lam, index
+

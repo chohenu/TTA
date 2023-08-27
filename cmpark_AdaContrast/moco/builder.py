@@ -47,11 +47,15 @@ class AdaMoCo(nn.Module):
         # create the fc heads
         feature_dim = src_model.output_dim
 
+        # cerate classfier output dim 
+        classifier_output_dim = src_model.fc.out_features
+
         # freeze key model
         self.momentum_model.requires_grad_(False)
 
         # create the memory bank
         self.register_buffer("mem_feat", torch.randn(feature_dim, K))
+        self.register_buffer("mem_prob", torch.randn(classifier_output_dim, K))
         self.register_buffer(
             "mem_labels", torch.randint(0, src_model.num_classes, (K,))
         )
@@ -60,6 +64,7 @@ class AdaMoCo(nn.Module):
         )
 
         self.mem_feat = F.normalize(self.mem_feat, dim=0)
+        # self.mem_prob = F.softmax(self.mem_prob, dim=0)
 
         if checkpoint_path:
             self.load_from_checkpoint(checkpoint_path)
@@ -91,17 +96,19 @@ class AdaMoCo(nn.Module):
     def return_membank(self): 
 
         return {'mem_feature': self.mem_feat.cpu().numpy(),
+                'mem_prob': self.mem_prob.cpu().numpy(),
                 'mem_pseudo_labels': self.mem_labels.cpu().numpy(),
                 'mem_gt':self.mem_gt.cpu().numpy()}
 
     @torch.no_grad()
-    def update_memory(self, keys, pseudo_labels, gt_labels):
+    def update_memory(self, keys, pseudo_labels, gt_labels, probs):
         """
         Update features and corresponding pseudo labels
         """
         # gather keys before updating queue
         keys = concat_all_gather(keys)
         pseudo_labels = concat_all_gather(pseudo_labels)
+        probs = concat_all_gather(probs)
         gt_labels = concat_all_gather(gt_labels.to('cuda'))
         
 
@@ -109,6 +116,7 @@ class AdaMoCo(nn.Module):
         end = start + len(keys)
         idxs_replace = torch.arange(start, end).cuda() % self.K
         self.mem_feat[:, idxs_replace] = keys.T
+        self.mem_prob[:, idxs_replace] = probs.T
         self.mem_labels[idxs_replace] = pseudo_labels
         self.mem_gt[idxs_replace] = gt_labels
         self.queue_ptr = end % self.K

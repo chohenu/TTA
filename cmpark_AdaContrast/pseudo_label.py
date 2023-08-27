@@ -8,6 +8,7 @@ from utils import (
 
 import math
 
+import torch.nn.functional as F
 @torch.no_grad()
 def soft_k_nearest_neighbors(features, features_bank, probs_bank, args):
     pred_probs = []
@@ -110,6 +111,29 @@ def soft_k_nearest_neighbors_fixmatch(features, features_bank, probs_bank, args)
     stack_num_neighbors = np.concatenate(stack_num_neighbors)
 
     return pred_labels, pred_probs, stack_num_neighbors
+
+@torch.no_grad()
+def soft_k_nearest_neighbors_support(features, features_bank, probs_bank,c_feature_bank, c_probs_bank, args):
+    pred_probs, stack_num_neighbors = [], []
+    for feats in features.split(64):
+        distances = get_distances(feats, features_bank, args.learn.dist_type)
+        _, idxs = distances.sort()
+        idxs = idxs[:, : args.learn.num_neighbors]
+        # (64, num_nbrs, num_classes), average over dim=1
+        probs = probs_bank[idxs, :]
+        c_probs = c_probs_bank[idxs, :]
+        concat_probs = torch.concat([probs,c_probs], axis=1)
+        pred_probs.append(concat_probs.mean(1))
+        ## filtering prob
+        # 
+        stack_num_neighbors.append(idxs.cpu().numpy())
+
+    pred_probs = torch.cat(pred_probs)
+    _, pred_labels = pred_probs.max(dim=1)
+    stack_num_neighbors = np.concatenate(stack_num_neighbors)
+
+    return pred_labels, pred_probs, stack_num_neighbors
+
 
 
 @torch.no_grad()
@@ -259,6 +283,35 @@ def gmm(all_fea, pi, mu, all_output):
     
     return zz, gamma
 
+
+
+def noise_detect(cluster_labels, labels, features, args, temp=0.25):
+    labels = labels.long()
+    centers = F.normalize(cluster_labels.T.mm(features), dim=1)
+    context_assigments_logits = features.mm(centers.T) / temp
+    context_assigments = F.softmax(context_assigments_logits, dim=1)
+    losses = - context_assigments[torch.arange(labels.size(0)), labels]
+    losses = losses.cpu().numpy()[:, np.newaxis]
+    losses = (losses - losses.min()) / (losses.max() - losses.min())
+    labels = labels.cpu().numpy()
+    
+    from sklearn.mixture import GaussianMixture
+    confidence = np.zeros((losses.shape[0],))
+    if args.learn.sep_gmm:
+        for i in range(cluster_labels.size(1)):
+            mask = labels == i
+            c = losses[mask, :]
+            gm = GaussianMixture(n_components=2, random_state=2).fit(c)
+            pdf = gm.predict_proba(c)
+            # label이 얼마나 clean한지 정량적으로 표현
+            confidence[mask] = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(gm.means_)]
+    else:
+        gm = GaussianMixture(n_components=2, random_state=0).fit(losses)
+        pdf = gm.predict_proba(losses)
+        confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(gm.means_)]
+    confidence = torch.from_numpy(confidence).float().cuda()
+    return confidence, context_assigments, centers
+
 class CenterGMM:
     def __init__(self, features_bank, probs_bank, bank, args): 
 
@@ -279,9 +332,9 @@ class CenterGMM:
         mu = torch.matmul(self.gamma.t(), (features_bank))
         mu = mu / pi.unsqueeze(dim=-1).expand_as(mu) # normalize first 
         zz, self.gamma = gmm((features_bank), pi, mu, self.gamma)
-        origin_gamm = self.gamma[index_bank]
-        pseudo_label = origin_gamm[batch_idxs] 
-        return pseudo_label, mu
+        # origin_gamm = self.gamma[index_bank]
+        # pseudo_label = origin_gamm[batch_idxs] 
+        return zz, mu
 
 @torch.no_grad()
 def refine_predictions(
@@ -299,6 +352,15 @@ def refine_predictions(
             features, feature_bank, probs_bank, args
         )
         
+    elif args.learn.refine_method == "nearest_neighbors_support":
+        feature_bank = banks["features"]
+        probs_bank = banks["probs"]
+        c_feature_bank = banks["c_features"]
+        c_probs_bank = banks["c_probs"]
+        
+        pred_labels, probs, stack_index = soft_k_nearest_neighbors_support(
+            features, feature_bank, probs_bank, c_feature_bank, c_probs_bank ,args
+        )
 
     elif args.learn.refine_method == "nearest_neighbors_fixmatch":
         feature_bank = banks["features"]
