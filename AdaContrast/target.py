@@ -116,7 +116,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 'Horse', 'Knife', 'Motorcycle', 'Person', 'Plant', 'Skateboard', 'Train', 'Truck']
         class_dict = {idx:name[:3]for idx, name in enumerate(class_name)}
 
-    if epoch > -1: ## wandb logging Error image
+    if epoch > -1 and False: ## wandb logging Error image
         num_images = 10
         y_true, y_pred = gt_labels.cpu().numpy(), pred_labels.cpu().numpy()
         diff_ = y_true != y_pred
@@ -184,7 +184,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
             features, probs, banks, args=args, gt_labels=gt_labels, return_index=args.learn.return_index
     )
 
-    if args.learn.return_index and args.learn.refine_method == "nearest_neighbors_fixmatch":
+    if args.learn.return_index and args.learn.refine_method == "nearest_neighbors_fixmatch" and False:
         if epoch > -1:
             select_index = 3
             origin_index = banks["index"]

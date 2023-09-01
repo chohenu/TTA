@@ -560,7 +560,7 @@ def train_epoch(train_loader, model, banks, optimizer, epoch, args):
             mask = mask - mask_diag
             ## peu
             # pseudo_labels_w
-da             one_hot_vector = torch.eye(12).cuda()[pseudo_labels_w] ## 64,12
+            one_hot_vector = torch.eye(12).cuda()[pseudo_labels_w] ## 64,12
             filtering_mask = one_hot_vector @ one_hot_vector.T # 64,12 & 12,64 -> 64x64
             mask *= 1-filtering_mask
 

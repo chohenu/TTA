@@ -19,7 +19,7 @@ add_mixup_loss : False
 aug_versions: "wss" # ["w", "ws", "wss", "ss"]
 dist_type: "cosine" # ["cosine", "euclidean"]
 ce_sup_type: "weak_strong" # ["weak_all", "weak_weak", "weak_strong", "conb_strong_strong"]
-refine_method: None #["conf_based_nearest_neighbors"]
+refine_method: nearest_neighbors_fixmatch #["conf_based_nearest_neighbors"]
 num_neighbors: 10
 queue_size: -1
 epoch_labeling: false
