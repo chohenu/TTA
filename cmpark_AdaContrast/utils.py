@@ -223,6 +223,15 @@ def get_augmentation(aug_type, normalize=None):
                 normalize,
             ]
         )
+    elif aug_type == "resize":
+        return transforms.Compose(
+            [
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                normalize,
+            ]
+        )
+
     elif aug_type == "five_crop":
         return transforms.Compose(
             [
