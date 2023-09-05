@@ -357,7 +357,7 @@ class hwc_MoCo(nn.Module):
 
         return x_gather[idx_this]
 
-    def forward(self, im_q, banks, idxs, im_k=None, pseudo_labels_w=None, epoch=None, cls_only=False):
+    def forward(self, im_q, banks, idxs, im_k=None, pseudo_labels_w=None, epoch=None, cls_only=False, prototypes=None):
         """
         Input:
             im_q: a batch of query images
@@ -394,14 +394,14 @@ class hwc_MoCo(nn.Module):
             softmax_out = torch.nn.Softmax(dim=1)(logits_q)
 
             origin_idx = torch.where(idxs.reshape(-1,1)==banks['index'])[1]
-            banks['noram_features'][origin_idx] = q
+            banks['norm_features'][origin_idx] = q
 
-            similarity = q @ banks['noram_features'].T
+            similarity = q @ banks['norm_features'].T
             _, idx_near = torch.topk(similarity, dim=-1, largest=True, k=5 + 1)
             idx_near = idx_near[:, 1:]  # batch x K
-            feat_near = banks['noram_features'][idx_near]  # batch x K x F
+            feat_near = banks['norm_features'][idx_near]  # batch x K x F            
             # if epoch < 3:
-            #     sim_ = feat_near @ banks['noram_features'].T
+            #     sim_ = feat_near @ banks['norm_features'].T
             #     _, idx_near_ = torch.topk(sim_, dim=-1, largest=True, k = 5 + 1)
             #     idx_near_ = idx_near_[:, :, 1:]
             #     bank_labels = torch.argmax(banks["probs"], dim=1)
@@ -410,7 +410,7 @@ class hwc_MoCo(nn.Module):
             #     feat_near = feat_near*mask.unsqueeze(-1)
             
             # curriculum nearest neighbor based epoch
-            # sim_ = feat_near @ banks['noram_features'].T
+            # sim_ = feat_near @ banks['norm_features'].T
             # _, idx_near_ = torch.topk(sim_, dim=-1, largest=True, k = 5 + 1)
             # idx_near_ = idx_near_[:, :, 1:]
             # bank_labels = torch.argmax(banks["probs"], dim=1)
@@ -423,6 +423,8 @@ class hwc_MoCo(nn.Module):
         # Einstein sum is more intuitive
         # positive logits: Nx1
         l_pos = torch.einsum("nkc,nkc->n", [q_, feat_near]).unsqueeze(-1)
+        # l_pos = torch.einsum("nkc,nkc->nk", [q_, feat_near]).unsqueeze(-1)
+        # l_pos = l_pos.mean(axis=1)
         # l_pos = l_pos / q_.shape[1]
         # adacontrast
         # l_pos = torch.einsum("nc,nc->n", [q, k]).unsqueeze(-1)
@@ -437,8 +439,16 @@ class hwc_MoCo(nn.Module):
         # apply temperature
         logits_ins /= self.T_moco
 
+        # prototype wise contrastive learning
+        with torch.no_grad():
+            proto_sim = q @ F.normalize(prototypes, dim=1).T ## (B x feature)x (Features class)= B, class
+            proto_label = torch.argmax(proto_sim, axis=1) 
+            proto_loss = F.cross_entropy(proto_sim, proto_label) 
+            # + F.cross_entropy(proto_sim, torch.argmax(softmax_out,1))
+
+
         # dequeue and enqueue will happen outside
-        return feats_q, logits_q, logits_ins, k, logits_k, l_neg_near
+        return feats_q, logits_q, logits_ins, k, logits_k, l_neg_near, proto_loss
 
 class AdaMixCo(nn.Module):
     """

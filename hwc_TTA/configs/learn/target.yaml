@@ -27,7 +27,7 @@ epoch_labeling: false
 # For Noisy Detector
 
 do_noise_detect: True
-use_ce_weight: False
+use_ce_weight: True
 use_mixup_weight: False
 use_mixup_weight_2: True
 use_mixup_regular: False

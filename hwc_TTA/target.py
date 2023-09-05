@@ -134,7 +134,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         "probs": probs[rand_idxs][: args.learn.queue_size],
         "logit": logits[rand_idxs][: args.learn.queue_size],
         "ptr": 0,
-        "noram_features": F.normalize(features[rand_idxs][: args.learn.queue_size]),
+        "norm_features": F.normalize(features[rand_idxs][: args.learn.queue_size]),
     }
     if args.learn.add_gt_in_bank: 
         banks.update({"gt": gt_labels[rand_idxs]})
@@ -159,6 +159,17 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         logging.info(f"noise_accuracy: {noise_accuracy}")
         logging.info(f"roc_auc_score: {context_noise_auc}")
         banks.update({"confidence": confidence[rand_idxs]})
+        # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
+        # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
+        
+    if False and is_master(args): 
+        import os
+        save_dir = str(wandb.run.dir)
+        logging.info(f"Saving Memory Bank : {save_dir}")
+        with open(f'{save_dir}/mix_val_{epoch}.pickle','wb') as fw:
+            pickle.dump(banks, fw)
+
+
     # refine predicted labels
     pred_labels, _, acc = refine_predictions(
             model, features, probs, banks, args=args, gt_labels=gt_labels, return_index=args.learn.return_index
@@ -811,16 +822,14 @@ def train_epoch_sfda(train_loader, model, banks,
             pseudo_labels_w, probs_w, _ = refine_predictions(
                 model, feats_w, probs_w, banks, args=args, return_index=args.learn.return_index
             )
-        # strong aug model output 
-        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near = model(images_q, banks, idxs, images_k, pseudo_labels_w, epoch)
-        
-        
         
         # similarity btw prototype(mean) and feats_w
         prototypes, similarity_a = prototype_cluster(banks, feats_w)
         # prototypes, similarity_a = soft_gmm_clustering(banks, feats_w)
         
-    
+        # strong aug model output 
+        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, proto_loss = model(images_q, banks, idxs, images_k, pseudo_labels_w, epoch, prototypes=prototypes)
+        
         # mixup
         alpha = 1.0
         inputs, targets_a, targets_b, lam, mix_idx = mixup_data(images_w, pseudo_labels_w,
@@ -839,9 +848,9 @@ def train_epoch_sfda(train_loader, model, banks,
         # prototypes, similarity_b = soft_gmm_clustering(banks, feats_mix)
         
         if args.learn.do_noise_detect:
-        
+            prototypes = concat_all_gather(prototypes)
             confidence = noise_detect_proto(prototypes, banks, args, temp=0.25)
-        
+            ignore_idx = confidence[origin_idx] < 0.5 # select noise label
     
         if args.learn.use_mixup_weight and args.learn.do_noise_detect:
             weight_a = torch.exp(banks["confidence"][origin_idx])
@@ -868,12 +877,15 @@ def train_epoch_sfda(train_loader, model, banks,
             loss_mix = torch.nn.L1Loss()(pred_ratio, target_ratio)
         else:
             loss_mix = mixup_criterion(target_mix_logit, targets_a, targets_b, lam=lam, weight_a=None, weight_b=None)
-        loss_mix += KLLoss(similarity_a, probs_w, epsilon=1e-8)
-        loss_mix += KLLoss(similarity_b, targets_mix, epsilon=1e-8)            
+        # loss_mix += KLLoss(similarity_a, probs_w, epsilon=1e-8)
+        # loss_mix += KLLoss(similarity_b, targets_mix, epsilon=1e-8)            
             
         # Calculate reliable degree of pseudo labels
         if args.learn.use_ce_weight and args.learn.do_noise_detect:
-            CE_weight = torch.exp(confidence[origin_idx])
+            # CE_weight = torch.exp(confidence[origin_idx])
+            CE_weight = confidence[origin_idx]
+            CE_weight[ignore_idx] = 0
+            
             # if epoch < 3:
             #     CE_weight = torch.exp(confidence[origin_idx])
             # else:
@@ -917,6 +929,7 @@ def train_epoch_sfda(train_loader, model, banks,
             args.learn.alpha * loss_cls
             + args.learn.beta * loss_ins
             + args.learn.eta * loss_div
+            + 1 * proto_loss
             + loss_mix
         )
         
@@ -940,6 +953,7 @@ def train_epoch_sfda(train_loader, model, banks,
                 "loss_div": args.learn.eta * loss_div.item(),
                 "loss_mix": loss_mix.item(),
                 "acc_ins": accuracy_ins.item(),
+                "loss_proto": proto_loss.item()
             }
             
             wandb.log(wandb_dict, commit=(i != len(train_loader) - 1))
@@ -951,13 +965,16 @@ def train_epoch_sfda(train_loader, model, banks,
             progress.display(i)
             
 def noise_detect_cls(cluster_labels, labels, features, args, temp=0.25):
+    
     labels = labels.long()
     centers = F.normalize(cluster_labels.T.mm(features), dim=1)
-    context_assigments_logits = features.mm(centers.T) / temp
+    context_assigments_logits = features.mm(centers.T) / temp # sim feature with center
     context_assigments = F.softmax(context_assigments_logits, dim=1)
-    losses = - context_assigments[torch.arange(labels.size(0)), labels]
+    # labels model argmax
+    # distance_label = F.argmax(context_assigments,axis=1)[1]
+    losses = - context_assigments[torch.arange(labels.size(0)), labels] # select target cluster distance
     losses = losses.cpu().numpy()[:, np.newaxis]
-    losses = (losses - losses.min()) / (losses.max() - losses.min())
+    losses = (losses - losses.min()) / (losses.max() - losses.min()) # normalize (min,max)
     losses = np.nan_to_num(losses)
     labels = labels.cpu().numpy()
     
@@ -976,6 +993,7 @@ def noise_detect_cls(cluster_labels, labels, features, args, temp=0.25):
         pdf = gm.predict_proba(losses)
         confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(gm.means_)]
     confidence = torch.from_numpy(confidence).float().cuda()
+    # , losses, pdf / pdf.sum(1)[:, np.newaxis]
     return confidence
 
 def noise_detect_proto(prototypes, banks, args, temp=0.25):
@@ -1102,7 +1120,7 @@ def prototype_cluster(banks, features):
     prototypes = torch.cat(prototypes, dim=0)
     
     similarity = F.normalize(features, dim=1) @ F.normalize(prototypes, dim=1).T
-    similarity = F.softmax(similarity, dim=1)
+    # similarity = F.softmax(similarity, dim=1)
     
     return prototypes, similarity
  
@@ -1183,7 +1201,9 @@ def classification_loss(logits_w, logits_s, target_labels, CE_weight, args):
         loss_cls = (CE_weight * cross_entropy_loss(logits_w, target_labels, args)).mean()
         
     elif args.learn.ce_sup_type == "weak_strong":
-        loss_cls = (CE_weight * cross_entropy_loss(logits_s, target_labels, args)).mean()
+        # loss_cls = (CE_weight * cross_entropy_loss(logits_s, target_labels, args)).mean()
+        loss_cls = (CE_weight * cross_entropy_loss(logits_s, target_labels, args))
+        loss_cls = loss_cls[loss_cls!=0].mean() # ignore zero
         accuracy = calculate_acc(logits_s, target_labels)
         
     elif args.learn.ce_sup_type == "weak_strong_kl":
@@ -1203,7 +1223,6 @@ def div(logits, epsilon=1e-8):
     loss_div = -torch.sum(-probs_mean * torch.log(probs_mean + epsilon))
 
     return loss_div
-
 
 def diversification_loss(logits_w, logits_s, args):
     if args.learn.ce_sup_type == "weak_weak":
@@ -1267,10 +1286,10 @@ def sfda_loss(banks, pseudo_labels_w, images_q, feats_q, logits_q, idxs):
         softmax_out = torch.nn.Softmax(dim=1)(logits_q)
 
         origin_idx = torch.where(idxs.reshape(-1,1)==banks['index'])[1]
-        banks['noram_features'][origin_idx] = output_f_
+        banks['norm_features'][origin_idx] = output_f_
         banks['probs'][origin_idx] = softmax_out
 
-        distance = output_f_ @ banks['noram_features'].T
+        distance = output_f_ @ banks['norm_features'].T
         _, idx_near = torch.topk(distance, dim=-1, largest=True, k=5 + 1)
         idx_near = idx_near[:, 1:]  # batch x K
         score_near = banks['probs'][idx_near]  # batch x K x C
