@@ -2,9 +2,9 @@ SRC_DOMAIN="real"
 TGT_DOMAIN="clipart"
 SRC_MODEL_DIR="/opt/tta/hwc_TTA/output/domainnet-126/source"
 
-PORT=10011
+PORT=10013
 MEMO="Confidence"
-SUB_MEMO="CE+PCLs_Mean-KL"
+SUB_MEMO="CE-KL+PSL_FILTER+FIRST_CONFI_VER2+PL_FNOISE"
 
 for SEED in 2020
 do
