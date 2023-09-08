@@ -42,11 +42,11 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 import math
 from sklearn.mixture import GaussianMixture  ## numpy version
+from sklearn.metrics import precision_recall_fscore_support
 
 @torch.no_grad()
-def eval_and_label_dataset(dataloader, model, banks, epoch, args):
+def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     wandb_dict = dict()
-
     # make sure to switch to eval mode
     model.eval()
     # projector = model.src_model.projector_q
@@ -141,7 +141,14 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
 
     if args.learn.return_index: 
         banks.update({"index": indices[rand_idxs]})
-        
+    
+    banks.update({'gm':gm})
+    
+    # if args.learn.pcl_loss: 
+    #     banks['im2cluster'].append(torch.zeros(len(features),dtype=torch.long).cuda())
+    #     banks['centroids'].append(torch.zeros(int(logits.shape[1]), features.shape[1]).cuda())
+    #     banks['density'].append(torch.zeros(int(logits.shape[1])).cuda()) 
+    
     if args.learn.do_noise_detect:
         logging.info(
             "Do Noise Detection"
@@ -149,9 +156,12 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, args):
         noise_labels = pred_labels
         is_clean = gt_labels.cpu().numpy() == noise_labels.cpu().numpy()
         
-        confidence = noise_detect_cls(cluster_labels, noise_labels, 
-                                                                features, args)
-        noise_accuracy = ((confidence > 0.5) == (gt_labels == noise_labels)).float().mean()
+        confidence = noise_detect_cls(cluster_labels, noise_labels, features, banks, args)
+        # confidence, = noise_detect_cls(cluster_labels, noise_labels, features, args, return_center=True)
+        match_confi = confidence > 0.5
+        match_label = gt_labels == noise_labels
+        noise_accuracy = (match_confi == match_label).float().mean()
+        precision_recall_fscore_support(match_confi, match_label)
         logging.info(
             f"noise_accuracy: {noise_accuracy}"
         )
@@ -231,7 +241,22 @@ def selective_soft_k_nearest_neighbors(features, features_bank, probs_bank, args
     near_feat = torch.cat(near_avg_feats)
     return near_feat
 
+@torch.no_grad()
+def soft_k_nearest_near_noise(features, features_bank, probs_bank, confidence_bank, args):
+    pred_probs = []
+    for feats in features.split(64):
+        distances = get_distances(feats, features_bank, args.learn.dist_type)
+        _, idxs = distances.sort()
+        idxs = idxs[:, : args.learn.num_neighbors]
+        # (64, num_nbrs, num_classes), average over dim=1
+        mask = (confidence_bank[idxs] > 0.5).unsqueeze(-1)
+        probs_ = (probs_bank[idxs, :]*mask)
+        probs = (probs_.sum(dim=1)/(mask.sum(dim=1)+1e-8))
+        pred_probs.append(probs)
+    pred_probs = torch.cat(pred_probs)
+    _, pred_labels = pred_probs.max(dim=1)
 
+    return pred_labels, pred_probs, None
 
 @torch.no_grad()
 def update_labels(banks, idxs, features, logits, labels, args):
@@ -294,6 +319,15 @@ def refine_predictions(
         logits = logits.reshape(near_feat.shape[0], 10, probs[0].shape[0])
         probs = F.softmax(logits, dim=-1).mean(1)
         pred_labels = torch.argmax(probs, dim=1)
+
+    elif args.learn.refine_method == "nearest_noise":
+        confidence_bank = banks["confidence"]
+        feature_bank = banks["features"]
+        probs_bank = banks["probs"]
+        pred_labels, probs, stack_index = soft_k_nearest_near_noise(
+        features, feature_bank, probs_bank, confidence_bank, args
+        )
+
     elif args.learn.refine_method is None:
         pred_labels = probs.argmax(dim=1)
     else:
@@ -427,8 +461,10 @@ def train_target_domain(args):
     val_loader = DataLoader(
         val_dataset, batch_size=256, sampler=val_sampler, num_workers=2
     )
+    gm = GaussianMixture(n_components=2, random_state=0)
+
     pseudo_item_list, banks = eval_and_label_dataset(
-        val_loader, model, banks=None, epoch=-1, args=args
+        val_loader, model, banks=None, epoch=-1, gm=gm, args=args
     )
     logging.info("2 - Computed initial pseudo labels")
     
@@ -475,7 +511,7 @@ def train_target_domain(args):
             train_epoch_sfda(train_loader, model, banks,
                         optimizer, epoch, args)
         
-        eval_and_label_dataset(val_loader, model, banks, epoch, args)
+        _, banks = eval_and_label_dataset(val_loader, model, banks, epoch, banks['gm'], args)
 
     if is_master(args):
         filename = f"checkpoint_{epoch:04d}_{args.data.src_domain}-{args.data.tgt_domain}-{args.sub_memo}_{args.seed}.pth.tar"
@@ -828,7 +864,8 @@ def train_epoch_sfda(train_loader, model, banks,
         # prototypes, similarity_a = soft_gmm_clustering(banks, feats_w)
         
         # strong aug model output 
-        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, proto_loss = model(images_q, banks, idxs, images_k, pseudo_labels_w, epoch, prototypes=prototypes)
+        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, proto_loss = model(images_q, banks, idxs, images_k, pseudo_labels_w, epoch, 
+                                                                                            prototypes=prototypes, similarity=similarity_a)
         
         # mixup
         alpha = 1.0
@@ -847,11 +884,12 @@ def train_epoch_sfda(train_loader, model, banks,
         prototypes, similarity_b = prototype_cluster(banks, feats_mix)
         # prototypes, similarity_b = soft_gmm_clustering(banks, feats_mix)
         
-        if args.learn.do_noise_detect:
-            prototypes = concat_all_gather(prototypes)
-            confidence = noise_detect_proto(prototypes, banks, args, temp=0.25)
-            ignore_idx = confidence[origin_idx] < 0.5 # select noise label
-    
+        # if args.learn.do_noise_detect:
+            # prototypes = concat_all_gather(prototypes)
+            # confidence = noise_detect_proto(prototypes, banks, args, temp=0.25)
+            # ignore_idx = confidence[origin_idx] < 0.5 # select noise label
+        confidence = banks['confidence']
+        ignore_idx = confidence[origin_idx] < 0.5 # select noise label
         if args.learn.use_mixup_weight and args.learn.do_noise_detect:
             weight_a = torch.exp(banks["confidence"][origin_idx])
             weight_b = torch.exp(weight_a[mix_idx])
@@ -877,8 +915,6 @@ def train_epoch_sfda(train_loader, model, banks,
             loss_mix = torch.nn.L1Loss()(pred_ratio, target_ratio)
         else:
             loss_mix = mixup_criterion(target_mix_logit, targets_a, targets_b, lam=lam, weight_a=None, weight_b=None)
-        # loss_mix += KLLoss(similarity_a, probs_w, epsilon=1e-8)
-        # loss_mix += KLLoss(similarity_b, targets_mix, epsilon=1e-8)            
             
         # Calculate reliable degree of pseudo labels
         if args.learn.use_ce_weight and args.learn.do_noise_detect:
@@ -929,7 +965,7 @@ def train_epoch_sfda(train_loader, model, banks,
             args.learn.alpha * loss_cls
             + args.learn.beta * loss_ins
             + args.learn.eta * loss_div
-            + 1 * proto_loss
+            + proto_loss
             + loss_mix
         )
         
@@ -964,7 +1000,7 @@ def train_epoch_sfda(train_loader, model, banks,
         if i % args.learn.print_freq == 0:
             progress.display(i)
             
-def noise_detect_cls(cluster_labels, labels, features, args, temp=0.25):
+def noise_detect_cls(cluster_labels, labels, features, banks, args, temp=0.25, return_center=False):
     
     labels = labels.long()
     centers = F.normalize(cluster_labels.T.mm(features), dim=1)
@@ -989,12 +1025,15 @@ def noise_detect_cls(cluster_labels, labels, features, args, temp=0.25):
             # label이 얼마나 clean한지 정량적으로 표현
             confidence[mask] = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(gm.means_)]
     else:
-        gm = GaussianMixture(n_components=2, random_state=0).fit(losses)
-        pdf = gm.predict_proba(losses)
-        confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(gm.means_)]
+        banks['gm'].fit(losses)
+        pdf = banks['gm'].predict_proba(losses)
+        confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(banks['gm'].means_)]
     confidence = torch.from_numpy(confidence).float().cuda()
-    # , losses, pdf / pdf.sum(1)[:, np.newaxis]
-    return confidence
+    if return_center : 
+        # , losses, pdf / pdf.sum(1)[:, np.newaxis]
+        return confidence
+    else: 
+        return confidence
 
 def noise_detect_proto(prototypes, banks, args, temp=0.25):
     features = F.normalize(banks["features"], dim=1)
@@ -1104,8 +1143,14 @@ def prototype(banks, features):
     return prototypes, similarity
    
 def prototype_cluster(banks, features):
-    feature_bank = banks["features"]
-    probs_bank = banks["probs"]
+    if True :
+        f_index = banks['confidence']> 0.5
+        feature_bank = banks['features'][f_index]
+        probs_bank = banks['probs'][f_index]
+    else:
+        feature_bank = banks["features"]
+        probs_bank = banks["probs"]
+
     pseudo_label_bank = probs_bank.argmax(dim=1)
     
     n_cluster = probs_bank.shape[1]

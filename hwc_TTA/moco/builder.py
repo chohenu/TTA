@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from utils import concat_all_gather
 from torch.autograd import Variable
 
+import random
 
 class AdaMoCo(nn.Module):
     """
@@ -261,6 +262,8 @@ class hwc_MoCo(nn.Module):
         if checkpoint_path:
             self.load_from_checkpoint(checkpoint_path)
 
+        self.cluster_loss = nn.KLDivLoss(size_average=False)
+
     def load_from_checkpoint(self, checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
         state_dict = dict()
@@ -357,7 +360,14 @@ class hwc_MoCo(nn.Module):
 
         return x_gather[idx_this]
 
-    def forward(self, im_q, banks, idxs, im_k=None, pseudo_labels_w=None, epoch=None, cls_only=False, prototypes=None):
+    def get_cluster_prob(self, embeddings, cluster_centers):
+        norm_squared = torch.sum((embeddings.unsqueeze(1) - cluster_centers) ** 2, 2)
+        numerator = 1.0 / (1.0 + (norm_squared / 1))
+        power = float(1 + 1) / 2
+        numerator = numerator ** power
+        return numerator / torch.sum(numerator, dim=1, keepdim=True)
+
+    def forward(self, im_q, banks, idxs, im_k=None, pseudo_labels_w=None, epoch=None, cls_only=False, prototypes=None, similarity=None):
         """
         Input:
             im_q: a batch of query images
@@ -390,16 +400,16 @@ class hwc_MoCo(nn.Module):
             # undo shuffle
             k = self._batch_unshuffle_ddp(k, idx_unshuffle)
             
-        with torch.no_grad():
-            softmax_out = torch.nn.Softmax(dim=1)(logits_q)
+        # with torch.no_grad():
+        #     softmax_out = torch.nn.Softmax(dim=1)(logits_q)
 
-            origin_idx = torch.where(idxs.reshape(-1,1)==banks['index'])[1]
-            banks['norm_features'][origin_idx] = q
+        #     origin_idx = torch.where(idxs.reshape(-1,1)==banks['index'])[1]
+        #     banks['norm_features'][origin_idx] = q
 
-            similarity = q @ banks['norm_features'].T
-            _, idx_near = torch.topk(similarity, dim=-1, largest=True, k=5 + 1)
-            idx_near = idx_near[:, 1:]  # batch x K
-            feat_near = banks['norm_features'][idx_near]  # batch x K x F            
+        #     similarity = q @ banks['norm_features'].T
+        #     _, idx_near = torch.topk(similarity, dim=-1, largest=True, k=5 + 1)
+        #     idx_near = idx_near[:, 1:]  # batch x K
+        #     feat_near = banks['norm_features'][idx_near]  # batch x K x F            
             # if epoch < 3:
             #     sim_ = feat_near @ banks['norm_features'].T
             #     _, idx_near_ = torch.topk(sim_, dim=-1, largest=True, k = 5 + 1)
@@ -418,13 +428,14 @@ class hwc_MoCo(nn.Module):
             # mask= mask.sum(dim=-1) > (4-epoch)
             # feat_near = feat_near*mask.unsqueeze(-1)
         # nn
+        l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
         q_ = q.unsqueeze(1).expand(-1, 5, -1) # batch x K x F 
         # compute logits
         # Einstein sum is more intuitive
         # positive logits: Nx1
-        l_pos = torch.einsum("nkc,nkc->n", [q_, feat_near]).unsqueeze(-1)
-        # l_pos = torch.einsum("nkc,nkc->nk", [q_, feat_near]).unsqueeze(-1)
-        # l_pos = l_pos.mean(axis=1)
+        # l_pos = torch.einsum("nkc,nkc->n", [q_, feat_near]).unsqueeze(-1)
+        # l_pos = torch.einsum("nkc,nkc->nk", [q_, feat_near]).unsqueeze(-1) # B, K, 1
+        # l_pos = l_pos.mean(axis=1) # ) # B, 1
         # l_pos = l_pos / q_.shape[1]
         # adacontrast
         # l_pos = torch.einsum("nc,nc->n", [q, k]).unsqueeze(-1)
@@ -441,12 +452,56 @@ class hwc_MoCo(nn.Module):
 
         # prototype wise contrastive learning
         with torch.no_grad():
+            
             proto_sim = q @ F.normalize(prototypes, dim=1).T ## (B x feature)x (Features class)= B, class
+            # proto_sim /= self.T_moco
+            # proto_sim = proto_sim**2 # sharping
             proto_label = torch.argmax(proto_sim, axis=1) 
             proto_loss = F.cross_entropy(proto_sim, proto_label) 
-            # + F.cross_entropy(proto_sim, torch.argmax(softmax_out,1))
+            # weight = (batch ** 2) / (torch.sum(batch, 0) + 1e-9)
+            # proto_loss = self.cluster_loss(proto_sim, softmax_out)/softmax_out.shape[0]
 
+        #     # + F.cross_entropy(proto_sim, torch.argmax(softmax_out,1))
 
+        # cosin_distance = (1 - similarity)
+        # (cosin_distance**0.5).mean(axis=1)/torch.log(torch.tensor(cosin_distance.size(1)+10))
+        # # if cluster_result is not None:  
+        # index = torch.where(idxs.reshape(-1,1)==banks['index'])[1]
+        # proto_sim = q @ F.normalize(prototypes, dim=1).T ## (B x feature)x (Features class)= B, class
+        # proto_label = torch.argmax(proto_sim, axis=1) 
+        # pos_prototypes = prototypes[proto_label]
+
+        # all_proto_id = list(range(im2cluster.max()+1))
+        # neg_proto_id = set(proto_label.max()+1)-set(pos_proto_id.tolist())
+
+        # proto_labels = []
+        # proto_logits = []
+        
+        # # for n, (im2cluster,prototypes,density) in enumerate(zip(1 - similarity, prototypes , cluster_result['density'])):
+        #     # get positive prototypes
+        # # pos_proto_id = im2cluster[index]
+        # # pos_prototypes = prototypes[pos_proto_id]    
+        
+        # # sample negative prototypes
+        # all_proto_id = [i for i in range(im2cluster.max()+1)]       
+        # neg_proto_id = set(all_proto_id)-set(pos_proto_id.tolist())
+        # neg_proto_id = random.sample(neg_proto_id,self.r) #sample r negative prototypes 
+        # neg_prototypes = prototypes[neg_proto_id]    
+
+        # proto_selected = torch.cat([pos_prototypes,neg_prototypes],dim=0)
+        
+        # # compute prototypical logits
+        # logits_proto = torch.mm(q,proto_selected.t())
+        
+        # # targets for prototype assignment
+        # labels_proto = torch.linspace(0, q.size(0)-1, steps=q.size(0)).long().cuda()
+        
+        # # scaling temperatures for the selected prototypes
+        # temp_proto = density[torch.cat([pos_proto_id,torch.LongTensor(neg_proto_id).cuda()],dim=0)]  
+        # logits_proto /= temp_proto
+        
+        # proto_labels.append(labels_proto)
+        # proto_logits.append(logits_proto)
         # dequeue and enqueue will happen outside
         return feats_q, logits_q, logits_ins, k, logits_k, l_neg_near, proto_loss
 
