@@ -12,6 +12,33 @@ from utils import concat_all_gather
 from torch.autograd import Variable
 
 import random
+from sklearn.mixture import GaussianMixture
+import torch
+import torch.nn.functional as F
+
+class SCELoss(torch.nn.Module):
+    def __init__(self, alpha, beta, num_classes=10):
+        super(SCELoss, self).__init__()
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.alpha = alpha
+        self.beta = beta
+        self.num_classes = num_classes
+        self.cross_entropy = torch.nn.CrossEntropyLoss(reduction='none')
+
+    def forward(self, pred, labels, ignore_idx):
+        # CCE
+        ce = self.cross_entropy(pred, labels)[ignore_idx].mean()
+
+        # RCE
+        pred = F.softmax(pred, dim=1)
+        pred = torch.clamp(pred, min=1e-7, max=1.0)
+        label_one_hot = torch.nn.functional.one_hot(labels, self.num_classes).float().to(self.device)
+        label_one_hot = torch.clamp(label_one_hot, min=1e-4, max=1.0)
+        rce = (-1*torch.sum(pred[ignore_idx] * torch.log(label_one_hot[ignore_idx]), dim=1))
+
+        # Loss
+        loss = self.alpha * ce + self.beta * rce.mean()
+        return loss
 
 class AdaMoCo(nn.Module):
     """
@@ -223,6 +250,7 @@ class hwc_MoCo(nn.Module):
         K=16384,
         m=0.999,
         T_moco=0.07,
+        dataset_legth=None,
         checkpoint_path=None,
     ):
         """
@@ -257,12 +285,69 @@ class hwc_MoCo(nn.Module):
             "mem_gt", torch.randint(0, src_model.num_classes, (K,))
         )
 
+        self.register_buffer(
+            "mem_probs", torch.rand(K, src_model.num_classes)
+        )
+
+        self.register_buffer(
+            "mem_index", torch.randint(0, dataset_legth, (K,))
+        )
+
+        # self.gm = GaussianMixture(n_components=2, random_state=0)
+
         self.mem_feat = F.normalize(self.mem_feat, dim=0)
 
         if checkpoint_path:
             self.load_from_checkpoint(checkpoint_path)
 
         self.cluster_loss = nn.KLDivLoss(size_average=False)
+
+        self.sce_loss = SCELoss(1, 1, src_model.num_classes)
+
+    def fit_gmm(self, banks): 
+        labels = self.mem_labels.long()
+        centers = F.normalize(self.mem_probs.T.mm(self.mem_feat.T), dim=1)
+        context_assigments_logits = self.mem_feat.T.mm(centers.T) / 0.25 # sim feature with center
+        context_assigments = F.softmax(context_assigments_logits, dim=1)
+        # labels model argmax
+        # distance_label = F.argmax(context_assigments,axis=1)[1]
+        losses = - context_assigments[torch.arange(labels.size(0)), labels] # select target cluster distance
+        losses = losses.cpu().numpy()[:, np.newaxis]
+        losses = (losses - losses.min()) / (losses.max() - losses.min()) # normalize (min,max)
+        losses = np.nan_to_num(losses)
+        labels = labels.cpu().numpy()
+        
+        from sklearn.mixture import GaussianMixture
+        confidence = np.zeros((losses.shape[0],))
+        banks['gm'].fit(losses)
+        pdf = banks['gm'].predict_proba(losses)
+        confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(banks['gm'].means_)]
+        confidence = torch.from_numpy(confidence).float().cuda()
+        self.confidence = confidence
+        self.losses = losses
+        self.distance_pseudo = torch.argmax(context_assigments, axis=1)
+
+    def check_accuracy(self,): 
+        match_confi = self.confidence > 0.5
+        match_label = self.mem_labels == self.mem_gt
+        noise_accuracy = (match_confi == match_label).float().mean()
+
+        # only_clean_accuracy = ((match_confi == True) & (match_label == True)).float().mean()
+        only_clean_accuracy = (self.mem_gt[match_confi] == self.mem_labels[match_confi]).float().mean()
+        only_noise_accuracy = (self.mem_gt[~match_confi] == self.mem_labels[~match_confi]).float().mean()
+
+        logging.info(f"model_noise_accuracy: {noise_accuracy}")
+        logging.info(f"model_only_clean_accuracy: {only_clean_accuracy}")
+        logging.info(f"model_only_noise_accuracy: {only_noise_accuracy}")
+
+        log_dict = {"model_noise_accuracy" : noise_accuracy}
+        log_dict.update({"model_only_clean_accuracy" : only_clean_accuracy})
+        log_dict.update({"model_only_noise_accuracy" : only_noise_accuracy})
+        return log_dict
+
+    def find_confidence(self, banks): 
+        origin_idx = torch.where(self.mem_index.reshape(-1,1)==banks['index'])[1]
+        self.confidence = banks['confidence'][origin_idx]
 
     def load_from_checkpoint(self, checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
@@ -295,7 +380,7 @@ class hwc_MoCo(nn.Module):
                 'mem_gt':self.mem_gt.cpu().numpy()}
 
     @torch.no_grad()
-    def update_memory(self, keys, pseudo_labels, gt_labels):
+    def update_memory(self, keys, pseudo_labels, gt_labels, probs, index):
         """
         Update features and corresponding pseudo labels
         """
@@ -303,7 +388,8 @@ class hwc_MoCo(nn.Module):
         keys = concat_all_gather(keys)
         pseudo_labels = concat_all_gather(pseudo_labels)
         gt_labels = concat_all_gather(gt_labels.to('cuda'))
-        
+        probs = concat_all_gather(probs)
+        index = concat_all_gather(index)
 
         start = self.queue_ptr
         end = start + len(keys)
@@ -312,6 +398,8 @@ class hwc_MoCo(nn.Module):
         self.mem_labels[idxs_replace] = pseudo_labels
         self.mem_gt[idxs_replace] = gt_labels
         self.queue_ptr = end % self.K
+        self.mem_probs[idxs_replace, :] = probs
+        self.mem_index[idxs_replace] = index
 
     @torch.no_grad()
     def _batch_shuffle_ddp(self, x):
@@ -367,7 +455,7 @@ class hwc_MoCo(nn.Module):
         numerator = numerator ** power
         return numerator / torch.sum(numerator, dim=1, keepdim=True)
 
-    def forward(self, im_q, banks, idxs, im_k=None, pseudo_labels_w=None, epoch=None, cls_only=False, prototypes=None, similarity=None):
+    def forward(self, im_q, banks, idxs, im_k=None, pseudo_labels_w=None, epoch=None, cls_only=False, prototypes_q=None, prototypes_k=None, ignore_idx=None):
         """
         Input:
             im_q: a batch of query images
@@ -451,13 +539,81 @@ class hwc_MoCo(nn.Module):
         logits_ins /= self.T_moco
 
         # prototype wise contrastive learning
-        with torch.no_grad():
-            
-            proto_sim = q @ F.normalize(prototypes, dim=1).T ## (B x feature)x (Features class)= B, class
+        # proto_loss = None
+        
+        use_nce_type = False
+        diff_nce_type = True
+        if use_nce_type: 
+            norm_proto_q = F.normalize(prototypes_q, dim=1)
+            norm_proto_k = F.normalize(prototypes_k, dim=1)
+            l_pos_proto = torch.einsum('nc,nc->n', [norm_proto_q, norm_proto_k]).unsqueeze(-1)
+            l_neg_proto = torch.einsum("nc,ck->nk", [norm_proto_q, self.mem_feat.clone().detach()])
+            proto_logits_ins = torch.cat([l_pos_proto, l_neg_proto], dim=1)
+            # apply temperature
+            proto_logits_ins /= self.T_moco
+
+            # labels: positive key indicators
+            labels_ins = torch.zeros(proto_logits_ins.shape[0], dtype=torch.long).cuda()
+            mask = torch.ones_like(proto_logits_ins, dtype=torch.bool)
+            mask[:, 1:] = torch.range(0,l_pos_proto.size(0)-1).cuda().reshape(-1, 1) != self.mem_labels  # (B, K)
+            clean_confi = self.confidence > 0.5
+            clean_confi = clean_confi.unsqueeze(0).repeat(mask.size(0),1)
+            # mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
+
+            proto_logits_ins = torch.where(mask, proto_logits_ins, torch.tensor([float("-inf")]).cuda())
+            proto_loss = F.cross_entropy(proto_logits_ins, labels_ins)
+
+        elif diff_nce_type: 
+            psuedo_label = torch.argmax(logits_q, dim=1) # 64 = [0~ 12]
+            norm_proto_q = F.normalize(prototypes_q, dim=1) # 12,256
+            select_pos = norm_proto_q[psuedo_label] # 64,256
+            l_pos_proto = torch.einsum('nc,nc->n', [q, select_pos]).unsqueeze(-1) # post pair 64,1
+            # l_neg_proto = torch.einsum("nc,ck->nk", [select_pos, self.mem_feat.clone().detach()])
+            l_neg_proto = torch.mm(q, select_pos.T) # neg pair (64,64)
+            proto_logits_ins = torch.cat([l_pos_proto, l_neg_proto], dim=1)
+            # apply temperature
+            proto_logits_ins /= self.T_moco
+
+            # labels: positive key indicators
+            labels_ins = torch.zeros(proto_logits_ins.shape[0], dtype=torch.long).cuda()
+            mask = torch.ones_like(proto_logits_ins, dtype=torch.bool)
+            # mask[:, 1:] = psuedo_label.cuda().reshape(-1, 1) != self.mem_labels  # (B, K)
+            mask[:, 1:] = psuedo_label.cuda().reshape(-1, 1) != psuedo_label  # (B, K)
+            clean_confi = self.confidence < 0.5
+            clean_confi = clean_confi.unsqueeze(0).repeat(mask.size(0),1)
+            # mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
+
+            proto_logits_ins = torch.where(mask, proto_logits_ins, torch.tensor([float("-inf")]).cuda())
+            proto_loss = F.cross_entropy(proto_logits_ins, labels_ins)
+        else: 
+            proto_prob = F.softmax(self.src_model.classifier_q(F.normalize(prototypes_q, dim=1)), dim=1)
+            proto_sim = q @ F.normalize(prototypes_q, dim=1).T ## (B x feature)x (Features class)= B, class
+            proto_label = torch.argmax(proto_sim, axis=1) 
+            proto_sim = F.softmax(proto_sim,dim=1)
+            if ignore_idx.sum() > 0:
+                proto_loss = torch.nn.CrossEntropyLoss(reduction='none')(proto_sim, proto_label)
+                proto_loss = proto_loss[ignore_idx].mean()  
+                # proto_loss = F.kl_div(proto_sim[ignore_idx], proto_prob[proto_label][ignore_idx], reduction="none").sum(-1).mean()
+            else:
+                proto_loss = (torch.tensor([0.0]).to("cuda")*torch.nn.CrossEntropyLoss(reduction='none')(proto_sim, proto_label)).mean()
+        
+        
+        # proto_label = torch.argmax(proto_sim, axis=1)
+        # weight_sim = proto_sim/self.T_moco
+        # if ignore_idx.sum() > 0:
+            # proto_loss = torch.nn.CrossEntropyLoss(reduction='none')(proto_sim, proto_label)
+            # proto_loss = proto_loss[ignore_idx].mean()
+            # F.kl_div(proto_sim,proto_label)
+            # proto_loss = self.sce_loss(proto_sim,proto_label, ignore_idx)
+        # else:
+        #     proto_loss = (torch.tensor([0.0]).to("cuda")*torch.nn.CrossEntropyLoss(reduction='none')(proto_sim, proto_label)).mean()
+        
+        # with torch.no_grad():
+            # proto_sim = q @ F.normalize(prototypes, dim=1).T ## (B x feature)x (Features class)= B, class
             # proto_sim /= self.T_moco
             # proto_sim = proto_sim**2 # sharping
-            proto_label = torch.argmax(proto_sim, axis=1) 
-            proto_loss = F.cross_entropy(proto_sim, proto_label) 
+            # proto_label = torch.argmax(proto_sim, axis=1) 
+            # proto_loss = F.cross_entropy(proto_sim, proto_label) 
             # weight = (batch ** 2) / (torch.sum(batch, 0) + 1e-9)
             # proto_loss = self.cluster_loss(proto_sim, softmax_out)/softmax_out.shape[0]
 

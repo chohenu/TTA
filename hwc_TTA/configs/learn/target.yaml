@@ -17,6 +17,7 @@ add_mixup_loss : True
 
 # algo-related stuff
 aug_versions: "wss" # ["w", "ws", "wss", "ss"]
+val_aug_versions: "ow"
 dist_type: "cosine" # ["cosine", "euclidean"]
 ce_sup_type: "weak_strong" # ["weak_all", "weak_weak", "weak_strong", "conb_strong_strong", "weak_strong_kl"]
 refine_method: "nearest_neighbors" #"nearest_feat" #["conf_based_nearest_neighbors", "nearest_feat", "nearest_neighbors"]
@@ -36,6 +37,9 @@ mixup_reg_type: "sample"
 use_projector_q: False
 use_classfier_q: False
 sep_gmm: False
-
+use_confidence_instance_loss : False
+use_distance_instance_loss : False
+ignore_instance_loss : False
+proto_instance_loss : False
 # Fro vislized
 return_index : True
