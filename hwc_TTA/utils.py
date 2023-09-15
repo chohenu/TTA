@@ -159,6 +159,15 @@ def get_augmentation(aug_type, normalize=None):
         normalize = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
         )
+    # resize_transform = transforms.Compose(
+    #         [
+    #             transforms.Resize((224, 224)),
+    #             transforms.ToTensor(),
+    #             normalize,
+    #         ]
+    #     )
+    # list_aug = transforms.Lambda(lambda crops: torch.stack([resize_transform(crop) for crop in crops]))
+    # 
     if aug_type == "moco-v2":
         return transforms.Compose(
             [
@@ -211,6 +220,24 @@ def get_augmentation(aug_type, normalize=None):
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
                 normalize,
+            ]
+        )
+    elif aug_type == "rand_crop":
+        return transforms.Compose(
+            [
+                transforms.Resize((256, 256)),
+                transforms.RandomCrop(128),
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                normalize,
+            ]
+        )
+
+    elif aug_type == "five_crop":
+        return transforms.Compose(
+            [
+                transforms.Resize((256, 256)),
+                transforms.FiveCrop(128)
             ]
         )
     return None

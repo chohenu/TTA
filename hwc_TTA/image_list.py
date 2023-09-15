@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
-
+from torchvision import transforms
 
 def load_image(img_path):
     img = Image.open(img_path)
@@ -30,6 +30,13 @@ class ImageList(Dataset):
             self.build_index(label_file) if label_file else pseudo_item_list
         )
 
+        self.resize_transform = transforms.Compose(
+            [
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ]
+        )
     def build_index(self, label_file):
         """Build a list of <image path, class label> items.
 
@@ -67,6 +74,8 @@ class ImageList(Dataset):
         img = load_image(img_path)
         if self.transform:
             img = self.transform(img)
+            for crop_idx, crops in enumerate(img): 
+                if not isinstance(crops, torch.Tensor): img[crop_idx] = torch.stack([self.resize_transform(crop) for crop in crops])
 
         return img, label, idx
 
