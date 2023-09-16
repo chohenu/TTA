@@ -43,3 +43,4 @@ ignore_instance_loss : False
 proto_instance_loss : False
 # Fro vislized
 return_index : True
+use_conf_filter: True

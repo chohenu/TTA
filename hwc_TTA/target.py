@@ -534,8 +534,8 @@ def train_target_domain(args):
         f"best_{args.data.src_domain}_{args.seed}.pth.tar",
     )
     train_target = (args.data.src_domain != args.data.tgt_domain)
-    src_model = Classifier(args, train_target, checkpoint_path)
-    momentum_model = Classifier(args, train_target, checkpoint_path)
+    src_model = Classifier(args.model_src, train_target, checkpoint_path)
+    momentum_model = Classifier(args.model_src, train_target, checkpoint_path)
     
     # val_transform = get_augmentation("test")
     val_transform = get_augmentation_versions(args, False)
@@ -569,7 +569,8 @@ def train_target_domain(args):
             K=args.model_tta.queue_size,
             m=args.model_tta.m,
             T_moco=args.model_tta.T_moco,
-            dataset_legth=len(val_dataset)
+            dataset_legth=len(val_dataset),
+            args=args
         ).cuda()
     if args.distributed:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -689,7 +690,7 @@ def train_epoch_sfda(train_loader, model, banks,
         
         # similarity btw prototype(mean) and feats_w
         aug_prototypes = prototype_cluster(banks, use_aug_key=True)
-        prototypes = get_center_proto(banks, use_confidence=True)
+        prototypes = get_center_proto(banks, use_confidence=False)
         # aug_prototypes= prototype_cluster(banks, use_aug_key=True)
 
         # strong aug model output 
