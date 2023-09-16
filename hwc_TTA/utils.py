@@ -16,7 +16,7 @@ from moco.loader import GaussianBlur
 LOG_FORMAT = "[%(levelname)s] %(asctime)s %(filename)s:%(lineno)s %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
-NUM_CLASSES = {"domainnet-126": 126, "VISDA-C": 12}
+NUM_CLASSES = {"domainnet-126": 126, "VISDA-C": 12, "OfficeHome":65}
 
 
 def configure_logger(rank, log_path=None):

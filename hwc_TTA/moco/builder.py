@@ -252,6 +252,7 @@ class hwc_MoCo(nn.Module):
         T_moco=0.07,
         dataset_legth=None,
         checkpoint_path=None,
+        args=None
     ):
         """
         dim: feature dimension (default: 128)
@@ -303,7 +304,7 @@ class hwc_MoCo(nn.Module):
         self.cluster_loss = nn.KLDivLoss(size_average=False)
 
         self.sce_loss = SCELoss(1, 1, src_model.num_classes)
-
+        self.args = args
     def fit_gmm(self, banks): 
         labels = self.mem_labels.long()
         centers = F.normalize(self.mem_probs.T.mm(self.mem_feat.T), dim=1)
@@ -579,9 +580,15 @@ class hwc_MoCo(nn.Module):
             mask = torch.ones_like(proto_logits_ins, dtype=torch.bool)
             # mask[:, 1:] = psuedo_label.cuda().reshape(-1, 1) != self.mem_labels  # (B, K)
             mask[:, 1:] = psuedo_label.cuda().reshape(-1, 1) != psuedo_label  # (B, K)
-            clean_confi = self.confidence < 0.5
+            origin_idx = torch.where(idxs.reshape(-1,1)==banks['index'])[1]
+            batch_confidence = banks['confidence'][origin_idx]
+            if self.args.learn.use_conf_filter: 
+                clean_confi = batch_confidence > 0.5
+            else: 
+                clean_confi = batch_confidence < 0.5
+
             clean_confi = clean_confi.unsqueeze(0).repeat(mask.size(0),1)
-            # mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
+            mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
 
             proto_logits_ins = torch.where(mask, proto_logits_ins, torch.tensor([float("-inf")]).cuda())
             proto_loss = F.cross_entropy(proto_logits_ins, labels_ins)
