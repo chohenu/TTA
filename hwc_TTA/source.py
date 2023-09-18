@@ -83,9 +83,14 @@ def train_source_domain(args):
             args.data.image_root, split="val", transform=val_transform
         )
     else:
-        label_file = os.path.join(
-            args.data.image_root, f"{args.data.src_domain}_list.txt"
-        )
+        if args.data.dataset.lower() == 'pacs': 
+            label_file = os.path.join(
+                args.data.image_root, f"{args.data.src_domain}_test_kfold.txt"
+            )
+        else: 
+            label_file = os.path.join(
+                args.data.image_root, f"{args.data.src_domain}_list.txt"
+            )
         train_dataset = ImageList(
             args.data.image_root, label_file, transform=train_transform
         )
@@ -149,7 +154,11 @@ def train_source_domain(args):
     for t, tgt_domain in enumerate(args.data.target_domains):
         if tgt_domain == args.data.src_domain:
             continue
-        label_file = os.path.join(args.data.image_root, f"{tgt_domain}_list.txt")
+        if args.data.dataset.lower() == 'pacs': 
+            label_file = os.path.join(args.data.image_root, f"{tgt_domain}_test_kfold.txt")
+        else: 
+            label_file = os.path.join(args.data.image_root, f"{tgt_domain}_list.txt")
+
         tgt_dataset = ImageList(args.data.image_root, label_file, val_transform)
         sampler = DistributedSampler(tgt_dataset) if args.distributed else None
         tgt_loader = DataLoader(
