@@ -588,7 +588,7 @@ class hwc_MoCo(nn.Module):
                 clean_confi = batch_confidence < 0.5
 
             clean_confi = clean_confi.unsqueeze(0).repeat(mask.size(0),1)
-            mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
+            # mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
 
             proto_logits_ins = torch.where(mask, proto_logits_ins, torch.tensor([float("-inf")]).cuda())
             proto_loss = F.cross_entropy(proto_logits_ins, labels_ins)

@@ -15,7 +15,7 @@ import numpy as np
 import wandb
 import numpy as np
 
-from classifier import Classifier
+from classifier import Classifier, SHOTClassifier
 from image_list import ImageList, mixup_data
 from moco.builder import AdaMoCo, AdaMixCo, hwc_MoCo
 from moco.loader import NCropsTransform
@@ -249,7 +249,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
         # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
         
-    if False and is_master(args):
+    if True and is_master(args):
         import os
         save_dir = str(wandb.run.dir)
         logging.info(f"Saving Memory Bank : {save_dir}")
@@ -521,9 +521,14 @@ def train_target_domain(args):
 
     # if not specified, use the full length of dataset.
     if args.learn.queue_size == -1:
-        label_file = os.path.join(
-            args.data.image_root, f"{args.data.tgt_domain}_list.txt"
-        )
+        if args.data.dataset.lower() == 'pacs': 
+            label_file = os.path.join(
+                args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt"
+            )
+        else: 
+            label_file = os.path.join(
+                args.data.image_root, f"{args.data.tgt_domain}_list.txt"
+            )
         dummy_dataset = ImageList(args.data.image_root, label_file)
         data_length = len(dummy_dataset)
         args.learn.queue_size = data_length
@@ -534,12 +539,23 @@ def train_target_domain(args):
         f"best_{args.data.src_domain}_{args.seed}.pth.tar",
     )
     train_target = (args.data.src_domain != args.data.tgt_domain)
-    src_model = Classifier(args.model_src, train_target, checkpoint_path)
-    momentum_model = Classifier(args.model_src, train_target, checkpoint_path)
+    if True: 
+        src_model = Classifier(args.model_src, train_target, checkpoint_path)
+        momentum_model = Classifier(args.model_src, train_target, checkpoint_path)
+    # else: 
+    #     SHOTClassifier
+    #     SHOTClassifier
+        
     
     # val_transform = get_augmentation("test")
     val_transform = get_augmentation_versions(args, False)
-    label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_list.txt")
+    if args.data.dataset.lower() == 'pacs': 
+        label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt")
+    else: 
+        label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_list.txt")
+
+
+    
     val_dataset = ImageList(
         image_root=args.data.image_root,
         label_file=label_file,
@@ -869,7 +885,8 @@ def train_epoch_sfda(train_loader, model, banks,
                 "loss_div": args.learn.eta * loss_div.item(),
                 "loss_mix": loss_mix.item(),
                 "acc_ins": accuracy_ins.item(),
-                "loss_proto": proto_loss.item()
+                "loss_proto": proto_loss.item(),
+                "lr": optimizer.param_groups[0]['lr']
             }
             
             wandb.log(wandb_dict, commit=(i != len(train_loader) - 1))
@@ -1210,9 +1227,9 @@ def confi_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, 
         ## 일단 clean 안에서 본다면 어떻게 될까? 
         clean_confi = clean_confi.unsqueeze(0).repeat(mask.size(0),1)
 
-        d_mask[:, 1:] = d_mask[:, 1:] * clean_confi # (B, K)
+        # d_mask[:, 1:] = d_mask[:, 1:] * clean_confi # (B, K)
         # mask[:,1:] = mask[:,1:] * d_mask[:, 1:] # (B, K) 
-        mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
+        # mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
         logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
     elif contrast_type == "nearest" and pseudo_labels is not None:
         mask = torch.ones_like(logits_ins, dtype=torch.bool)

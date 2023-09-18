@@ -2,13 +2,13 @@ SRC_DOMAIN="Art"
 TGT_DOMAIN="Clipart"
 SRC_MODEL_DIR="/opt/tta/hwc_TTA/output/OfficeHome/source"
 
-PORT=10013
+PORT=10015
 MEMO="Confidence"
-SUB_MEMO="CE+B_NCONFv2_PROTONCE_ALL_B_CENTER_NCE"
+SUB_MEMO="CE+EPOCH15_B64_PROTONCE_ALL_B_CENTER_NCE"
 
 for SEED in 2020
 do
-    CUDA_VISIBLE_DEVICES=0,5 python main_adacontrast.py \
+    CUDA_VISIBLE_DEVICES=3,4 python main_adacontrast.py \
     seed=${SEED} port=${PORT} memo=${MEMO} sub_memo=${SUB_MEMO} project="OfficeHome" \
     data.data_root="/mnt/data" data.workers=8 \
     data.dataset="OfficeHome" data.source_domains="[${SRC_DOMAIN}]" data.target_domains="[${TGT_DOMAIN}]" \
@@ -21,5 +21,7 @@ do
     learn.refine_method='nearest_neighbors' \
     learn.sep_gmm=False\
     learn.use_conf_filter=False \
+    learn.epochs=15 \
+    data.batch_size=48 \
     optim.lr=2e-4
 done 
