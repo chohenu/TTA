@@ -17,7 +17,7 @@ import numpy as np
 
 from classifier import Classifier
 from image_list import ImageList, mixup_data
-from moco.builder import AdaMoCo, AdaMixCo, hwc_MoCo
+from moco.builder import hwc_MoCo
 from moco.loader import NCropsTransform
 from utils import (
     adjust_learning_rate,
@@ -157,23 +157,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 'Horse', 'Knife', 'Motorcycle', 'Person', 'Plant', 'Skateboard', 'Train', 'Truck']
         class_dict = {idx:name[:3]for idx, name in enumerate(class_name)}
 
-    # if epoch > -1: ## wandb logging Error image
-    #     num_images = 10
-    #     y_true, y_pred = gt_labels.cpu().numpy(), pred_labels.cpu().numpy()
-    #     diff_ = y_true != y_pred
-    #     diff_y_true, diff_y_pred, diff_indices = y_true[diff_], y_pred[diff_], indices[diff_]
-    #     class_num ,idx = np.unique(diff_y_true, return_inverse = True)
-    #     for i,cls_name in zip(class_num,class_name):
-    #         class_diff_index = diff_indices[idx==i][:num_images]
-    #         diff_class = diff_y_pred[idx==i][:num_images]
-    #         diff_class = np.array([class_dict[i] for i in diff_class])
-    #         image_list = [dataloader.dataset.__getitem__(i)[0] for i in class_diff_index]
-    #         wandb_dict.update({f'Error_class_{cls_name}':wandb.Image(
-    #                                         torch.concat(image_list,dim=2),
-    #                                         caption=f"Diff_class_{np.array2string(diff_class)}")
-                                            # })
-
-
     probs = F.softmax(logits, dim=1)
     rand_idxs = torch.randperm(len(features)).cuda()
     banks = {
@@ -197,11 +180,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         banks.update({"aug_logit":  wlogits[rand_idxs][: args.learn.queue_size]})
     
     banks.update({'gm':gm})
-    
-    # if args.learn.pcl_loss: 
-    #     banks['im2cluster'].append(torch.zeros(len(features),dtype=torch.long).cuda())
-    #     banks['centroids'].append(torch.zeros(int(logits.shape[1]), features.shape[1]).cuda())
-    #     banks['density'].append(torch.zeros(int(logits.shape[1])).cuda()) 
+
     
     if args.learn.do_noise_detect:
         logging.info(
@@ -550,41 +529,22 @@ def train_target_domain(args):
         label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt")
     else: 
         label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_list.txt")
-
-
     
     val_dataset = ImageList(
         image_root=args.data.image_root,
         label_file=label_file,
         transform=val_transform,
     )
-
-    if args.model_tta.type == "moco":
-        model = AdaMoCo(
-            src_model,
-            momentum_model,
-            K=args.model_tta.queue_size,
-            m=args.model_tta.m,
-            T_moco=args.model_tta.T_moco,
-        ).cuda()
-    elif args.model_tta.type == "mixco":
-        model = AdaMixCo(
-            src_model,
-            momentum_model,
-            K=args.model_tta.queue_size,
-            m=args.model_tta.m,
-            T_moco=args.model_tta.T_moco,
-        ).cuda()
-    elif args.model_tta.type == "sfda":
-        model = hwc_MoCo(
-            src_model,
-            momentum_model,
-            K=args.model_tta.queue_size,
-            m=args.model_tta.m,
-            T_moco=args.model_tta.T_moco,
-            dataset_legth=len(val_dataset),
-            args=args
-        ).cuda()
+    model = hwc_MoCo(
+        src_model,
+        momentum_model,
+        K=args.model_tta.queue_size,
+        m=args.model_tta.m,
+        T_moco=args.model_tta.T_moco,
+        dataset_legth=len(val_dataset),
+        args=args
+    ).cuda()
+    
     if args.distributed:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = CustomDistributedDataParallel(model, device_ids=[args.gpu])
@@ -638,14 +598,6 @@ def train_target_domain(args):
         if args.distributed:
             train_sampler.set_epoch(epoch)
             
-        # train for one epoch
-        # if args.model_tta.type == "moco":
-        #     train_epoch_moco(train_loader, model, banks,
-        #                 optimizer, epoch, args)
-        # elif args.model_tta.type == "mixco":
-        #     train_epoch_mixco(train_loader, model, banks,
-        #                 optimizer, epoch, args)
-        # elif args.model_tta.type == "sfda": 
         train_epoch_sfda(train_loader, model, banks,
                     optimizer, epoch, args)
         
@@ -707,67 +659,49 @@ def train_epoch_sfda(train_loader, model, banks,
         # aug_prototypes= prototype_cluster(banks, use_aug_key=True)
 
         # strong aug model output 
-        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, proto_loss = model(images_q, banks, idxs, images_k, pseudo_labels_w, epoch, 
+        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, loss_proto = model(images_q, banks, idxs, images_k, pseudo_labels_w, epoch, 
                                                                                             prototypes_q=prototypes, prototypes_k=aug_prototypes, 
-                                                                                            ignore_idx=ignore_idx)
+                                                                                            ignore_idx=ignore_idx, args=args)
         
         # mixup
         alpha = 1.0
-        inputs, targets_a, targets_b, lam, mix_idx = mixup_data(images_w, pseudo_labels_w,
+        inputs_w, targets_w_a, targets_w_b, lam_w, mix_w_idx = mixup_data(images_w, pseudo_labels_w,
                                                         alpha, use_cuda=True)
-        inputs, targets_a, targets_b = map(Variable, (inputs,
-                                                    targets_a, targets_b))
+        inputs_w, targets_w_a, targets_w_b = map(Variable, (inputs_w,
+                                                    targets_w_a, targets_w_b))
         
-        targets_mix = lam * torch.eye(args.num_clusters).cuda()[targets_a] + (1-lam) * torch.eye(args.num_clusters).cuda()[targets_b]
+        targets_w_mix = lam_w * torch.eye(args.num_clusters).cuda()[targets_w_a] + (1-lam_w) * torch.eye(args.num_clusters).cuda()[targets_w_b]
         
-        feats_mix, target_mix_logit = model(inputs, banks, idxs, cls_only=True)
+        feats_w_mix, target_w_mix_logit = model(inputs_w, banks, idxs, cls_only=True)
         
-        target_mix_hat = F.softmax(target_mix_logit, dim=1)
-
+        if args.learn.use_mixup_ws:
+        
+            inputs_q, targets_q_a, targets_q_b, lam_q, mix_q_idx = mixup_data(images_q, pseudo_labels_w,
+                                                            alpha, use_cuda=True)
+            inputs_q, targets_q_a, targets_q_b = map(Variable, (inputs_q,
+                                                        targets_q_a, targets_q_b))
+            
+            targets_q_mix = lam_q * torch.eye(args.num_clusters).cuda()[targets_q_a] + (1-lam_q) * torch.eye(args.num_clusters).cuda()[targets_q_b]
+            
+            feats_q_mix, target_q_mix_logit = model(inputs_q, banks, idxs, cls_only=True)
+        
         # similarity btw prototype and mixup input
-        # prototypes, similarity_b = prototype_cluster(banks, feats_mix)
-        # prototypes, similarity_b = soft_gmm_clustering(banks, feats_mix)
-        
-        # if args.learn.do_noise_detect:
-            # prototypes = concat_all_gather(prototypes)
-            # confidence = noise_detect_proto(prototypes, banks, args, temp=0.25)
-            # ignore_idx = confidence[origin_idx] < 0.5 # select noise label
         if args.learn.use_mixup_weight and args.learn.do_noise_detect:
-            weight_a = torch.exp(banks["confidence"][origin_idx])
-            weight_b = torch.exp(weight_a[mix_idx])
-            loss_mix = mixup_criterion(target_mix_logit, targets_a, targets_b, lam=lam, weight_a=weight_a, weight_b=weight_b)
-        elif args.learn.use_mixup_weight_2 and args.learn.do_noise_detect:
             weight_a = confidence[origin_idx]
-            weight_b = weight_a[mix_idx]
-            weight_mix = lam * weight_a + (1-lam) * weight_b
-            loss_mix = KLLoss(target_mix_logit, targets_mix, epsilon=1e-8, weight_mix=weight_mix)
-            # loss_mix = KLLoss(target_mix_logit, targets_mix, epsilon=1e-8)
-        elif args.learn.use_mixup_regular:
-            if args.learn.mixup_reg_type=='prototype':
-                sim_cluster_a = F.normalize(feats_mix, dim=1) @ F.normalize(prototypes, dim=1).T
-                sim_cluster_a = (sim_cluster_a*torch.eye(args.num_clusters).cuda()[targets_a]).sum(dim=1)
-                sim_cluster_b = F.normalize(feats_mix, dim=1) @ F.normalize(prototypes, dim=1).T
-                sim_cluster_b = (sim_cluster_b*torch.eye(args.num_clusters).cuda()[targets_b]).sum(dim=1)
-                pred_ratio = sim_cluster_a/sim_cluster_b
-            elif args.learn.mixup_reg_type=='sample':
-                sim_cluster_a = F.normalize(feats_mix, dim=1) @ F.normalize(feats_w, dim=1).T
-                sim_cluster_b = F.normalize(feats_mix, dim=1) @ F.normalize(feats_w[mix_idx], dim=1).T
-                pred_ratio = torch.diag(sim_cluster_a)/torch.diag(sim_cluster_b)
-            target_ratio = torch.tensor((lam/(1-lam))).cuda().repeat(pred_ratio.shape[0])
-            loss_mix = torch.nn.L1Loss()(pred_ratio, target_ratio)
+            weight_b = weight_a[mix_w_idx]
+            weight_mix_w = lam_w * weight_a + (1-lam_w) * weight_b
+            loss_mix = KLLoss(target_w_mix_logit, targets_w_mix, epsilon=1e-8, weight_mix=weight_mix_w)
+            if args.learn.use_mixup_ws:
+                weight_mix_q = lam_q * weight_a + (1-lam_q) * weight_b
+                loss_mix += KLLoss(target_q_mix_logit, targets_q_mix, epsilon=1e-8, weight_mix=weight_mix_q)
+            # loss_mix = KLLoss(target_w_mix_logit, targets_w_mix, epsilon=1e-8)
         else:
-            loss_mix = mixup_criterion(target_mix_logit, targets_a, targets_b, lam=lam, weight_a=None, weight_b=None)
+            loss_mix = mixup_criterion(target_w_mix_logit, targets_w_a, targets_w_b, lam=lam_w, weight_a=None, weight_b=None)
             
         # Calculate reliable degree of pseudo labels
         if args.learn.use_ce_weight and args.learn.do_noise_detect:
-            # CE_weight = torch.exp(confidence[origin_idx])
             CE_weight = confidence[origin_idx]
-            CE_weight[ignore_idx] = 0
-            
-            # if epoch < 3:
-            #     CE_weight = torch.exp(confidence[origin_idx])
-            # else:
-            #     CE_weight = 1.
+            CE_weight[ignore_idx] = 0 
         else:
             CE_weight = 1.
         
@@ -791,36 +725,6 @@ def train_epoch_sfda(train_loader, model, banks,
                 proto_sim=proto_sim, 
                 contrast_type=args.learn.contrast_type,
             )
-        elif args.learn.use_distance_instance_loss: 
-            q = F.normalize(feats_q, dim=1)
-            proto_sim = q @ F.normalize(prototypes, dim=1).T ## (B x feature)x (Features class)= B, class
-            proto_label = torch.argmax(proto_sim, axis=1) 
-            loss_ins, accuracy_ins = distance_instance_loss(
-                logits_ins=logits_ins,
-                pseudo_labels=pseudo_labels_w,
-                mem_labels=model.mem_labels,
-                logits_neg_near=logits_neg_near,
-                proto_label=proto_label, 
-                contrast_type=args.learn.contrast_type,
-            )
-        elif epoch > 0 and args.learn.ignore_instance_loss: 
-            loss_ins, accuracy_ins = ignore_instance_loss(
-                logits_ins=logits_ins,
-                pseudo_labels=pseudo_labels_w,
-                mem_labels=model.mem_labels,
-                logits_neg_near=logits_neg_near,
-                ignore_idx=ignore_idx, 
-                contrast_type=args.learn.contrast_type,
-            )
-        elif args.learn.proto_instance_loss: 
-            loss_ins, accuracy_ins = proto_instance_loss(
-                logits_ins=logits_ins,
-                pseudo_labels=pseudo_labels_w,
-                mem_labels=model.mem_labels,
-                logits_neg_near=logits_neg_near,
-                distance=similarity_a, 
-                contrast_type=args.learn.contrast_type,
-            )
         else: 
             # sfda instance loss
             loss_ins, accuracy_ins = instance_loss(
@@ -835,13 +739,9 @@ def train_epoch_sfda(train_loader, model, banks,
         top1_ins.update(accuracy_ins.item(), len(logits_ins))
 
         # classification
-        if args.learn.ce_sup_type == "weak_strong_kl":
-            loss_cls, accuracy_psd = classification_loss(
-            logits_w, logits_q, probs_w, CE_weight, args)
-        else:
-            loss_cls, accuracy_psd = classification_loss(
-                logits_w, logits_q, pseudo_labels_w, CE_weight, args
-            )
+        loss_cls, accuracy_psd = classification_loss(
+            logits_w, logits_q, pseudo_labels_w, CE_weight, args
+        )
         top1_psd.update(accuracy_psd.item(), len(logits_w))
 
         # diversification
@@ -856,7 +756,7 @@ def train_epoch_sfda(train_loader, model, banks,
             args.learn.alpha * loss_cls
             + args.learn.beta * loss_ins
             + args.learn.eta * loss_div
-            + proto_loss
+            + loss_proto
             + loss_mix
         )
         
@@ -882,7 +782,7 @@ def train_epoch_sfda(train_loader, model, banks,
                 "loss_div": args.learn.eta * loss_div.item(),
                 "loss_mix": loss_mix.item(),
                 "acc_ins": accuracy_ins.item(),
-                "loss_proto": proto_loss.item(),
+                "loss_proto": loss_proto.item(),
                 "lr": optimizer.param_groups[0]['lr']
             }
             
@@ -939,37 +839,6 @@ def get_center_proto(banks, use_confidence):
         centers = F.normalize(banks['probs'].T.mm(banks['features']), dim=1)
     return centers
 
-def noise_detect_proto(prototypes, banks, args, temp=0.25):
-    features = F.normalize(banks["features"], dim=1)
-    labels = torch.argmax(banks["probs"], dim=1)
-    labels = labels.long()
-    centers = F.normalize(prototypes, dim=1)
-    sim_w_center_logits = features @ centers.T / temp
-    sim_w_center = F.softmax(sim_w_center_logits, dim=1)
-    losses = - sim_w_center[torch.arange(labels.size(0)), labels]
-    losses = losses.cpu().numpy()[:, np.newaxis]
-    losses = (losses - losses.min()) / (losses.max() - losses.min())
-    # if np.isnan(losses).sum() > 0:
-    #     print(1)
-    losses = np.nan_to_num(losses)
-    labels = labels.cpu().numpy()
-    
-    from sklearn.mixture import GaussianMixture
-    confidence = np.zeros((losses.shape[0],))
-    if args.learn.sep_gmm:
-        for i in range(args.num_clusters):
-            mask = labels == i
-            c = losses[mask, :]
-            gm = GaussianMixture(n_components=2, random_state=2).fit(c)
-            pdf = gm.predict_proba(c)
-            # label이 얼마나 clean한지 정량적으로 표현
-            confidence[mask] = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(gm.means_)]
-    else:
-        gm = GaussianMixture(n_components=2, random_state=0).fit(losses)
-        pdf = gm.predict_proba(losses)
-        confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(gm.means_)]
-    confidence = torch.from_numpy(confidence).float().cuda()
-    return confidence
 
 @torch.no_grad()
 def soft_gmm_clustering(banks, features):
@@ -1079,29 +948,6 @@ def prototype_cluster(banks, use_aug_key):
 
     return prototypes
 
-def entropy(p, axis=1):
-    return -torch.sum(p * torch.log2(p+1e-5), dim=axis)
-
-def norm(x):
-    return (x - x.min()) / (x.max()-x.min())
-
-@torch.no_grad()
-def calculate_reliability(probs_w, feats_w, feats_q, feats_k):
-    # sim_w = norm(feats_w.mm(centers.T))
-    # sim_q = norm(feats_q.mm(centers.T))
-    # sim_k = norm(feats_k.mm(centers.T))
-    # sim_avg = F.softmax((sim_w + sim_q + sim_k)/3, dim=1)
-    max_entropy = torch.log2(torch.tensor(probs_w.size(1)))
-    w = entropy(probs_w)
-    # w = entropy(sim_avg)
-    
-    w = w / max_entropy
-    # w = w * confidence
-    w = torch.exp(-w)
-    
-    return w
-    
-
 @torch.no_grad()
 def calculate_acc(logits, labels):
     preds = logits.argmax(dim=1)
@@ -1121,61 +967,9 @@ def instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, contra
         mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
         logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
     elif contrast_type == "nearest" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        
-        _, idx_near = torch.topk(logits_neg_near, k=5, dim=-1, largest=True)
-        mask[:, 1:] *= torch.all(pseudo_labels.unsqueeze(1).repeat(1,5).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-
-    loss = F.cross_entropy(logits_ins, labels_ins)
-
-    accuracy = calculate_acc(logits_ins, labels_ins)
-
-    return loss, accuracy
-
-def ignore_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, ignore_idx, contrast_type):
-    # labels: positive key indicators
-    labels_ins = torch.zeros(logits_ins.shape[0], dtype=torch.long).cuda()
-
-    # in class_aware mode, do not contrast with same-class samples
-    if contrast_type == "class_aware" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-    elif contrast_type == "nearest" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        
-        _, idx_near = torch.topk(logits_neg_near, k=5, dim=-1, largest=True)
-        mask[:, 1:] *= torch.all(pseudo_labels.unsqueeze(1).repeat(1,5).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-
-    loss = F.cross_entropy(logits_ins[~ignore_idx], labels_ins[~ignore_idx])
-
-    accuracy = calculate_acc(logits_ins, labels_ins)
-
-    return loss, accuracy
-
-
-def distance_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, proto_label, contrast_type):
-    # labels: positive key indicators
-    labels_ins = torch.zeros(logits_ins.shape[0], dtype=torch.long).cuda()
-
-    # in class_aware mode, do not contrast with same-class samples
-    if contrast_type == "class_aware" and pseudo_labels is not None:
-        m_mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        d_mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        m_mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        d_mask[:, 1:] = proto_label.reshape(-1, 1) != mem_labels  # (B, K)
-        mask = m_mask * d_mask
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-    elif contrast_type == "nearest" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        
-        _, idx_near = torch.topk(logits_neg_near, k=5, dim=-1, largest=True)
-        mask[:, 1:] *= torch.all(pseudo_labels.unsqueeze(1).repeat(1,5).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
+        mask = torch.ones_like(logits_ins, dtype=torch.bool)        
+        _, idx_near = torch.topk(logits_neg_near, k=10, dim=-1, largest=True)
+        mask[:, 1:] = torch.all(pseudo_labels.unsqueeze(1).repeat(1,10).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
         logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
 
     loss = F.cross_entropy(logits_ins, labels_ins)
@@ -1241,76 +1035,6 @@ def confi_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, 
     accuracy = calculate_acc(logits_ins, labels_ins)
 
     return loss, accuracy
-
-def center_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, distance, contrast_type):
-    # labels: positive key indicators
-    labels_ins = torch.zeros(logits_ins.shape[0], dtype=torch.long).cuda()
-    distance = F.softmax(distance, dim=1)
-    losses = - distance[torch.arange(pseudo_labels.size(0)), pseudo_labels] # select target cluster distance
-    losses = losses.detach().cpu().numpy()[:, np.newaxis]
-    losses = (losses - losses.min()) / (losses.max() - losses.min()) # normalize (min,max)
-    # in class_aware mode, do not contrast with same-class samples
-    if contrast_type == "class_aware" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K) diff : 밀어낸다., same : 무시.
-        ignore_idx = losses < 0.3 # (1, K) # Clean : 밀어낸다., Noise 무시
-        ignore_idx = ignore_idx[:,0]
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-    elif contrast_type == "nearest" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        
-        _, idx_near = torch.topk(logits_neg_near, k=5, dim=-1, largest=True)
-        mask[:, 1:] *= torch.all(pseudo_labels.unsqueeze(1).repeat(1,5).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-
-    loss = F.cross_entropy(logits_ins[ignore_idx], labels_ins[ignore_idx])
-
-    accuracy = calculate_acc(logits_ins, labels_ins)
-
-    return loss, accuracy
-    
-def proto_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, distance, contrast_type):
-    # labels: positive key indicators
-    labels_ins = torch.zeros(logits_ins.shape[0], dtype=torch.long).cuda()
-    distance = F.softmax(distance, dim=1)
-    losses = - distance[torch.arange(pseudo_labels.size(0)), pseudo_labels] # select target cluster distance
-    losses = losses.detach().cpu().numpy()[:, np.newaxis]
-    losses = (losses - losses.min()) / (losses.max() - losses.min()) # normalize (min,max)
-    # in class_aware mode, do not contrast with same-class samples
-    if contrast_type == "class_aware" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K) diff : 밀어낸다., same : 무시.
-        ignore_idx = losses < 0.3 # (1, K) # Clean : 밀어낸다., Noise 무시
-        ignore_idx = ignore_idx[:,0]
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-    elif contrast_type == "nearest" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        
-        _, idx_near = torch.topk(logits_neg_near, k=5, dim=-1, largest=True)
-        mask[:, 1:] *= torch.all(pseudo_labels.unsqueeze(1).repeat(1,5).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-
-    loss = F.cross_entropy(logits_ins[ignore_idx], labels_ins[ignore_idx])
-
-    accuracy = calculate_acc(logits_ins, labels_ins)
-
-    return loss, accuracy
-
-def mixco_loss(logits_ins, labels_ins, pseudo_labels_a, pseudo_labels_b, mem_labels, 
-               contrast_type, epsilon=1e-8):
-    N = pseudo_labels_a.shape[0]
-    # in class_aware mode, do not contrast with same-class samples
-    if contrast_type == "class_aware" and pseudo_labels_a is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 2*N:] = (pseudo_labels_a.reshape(-1, 1) != mem_labels) * (pseudo_labels_b.reshape(-1, 1) != mem_labels)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-    
-    probs = F.softmax(logits_ins, dim=1)
-    nll_loss = (-labels_ins * torch.log(probs + epsilon)).sum(dim=1).mean(0)
-
-    return nll_loss
 
 
 def classification_loss(logits_w, logits_s, target_labels, CE_weight, args):
