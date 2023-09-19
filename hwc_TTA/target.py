@@ -15,7 +15,7 @@ import numpy as np
 import wandb
 import numpy as np
 
-from classifier import Classifier, SHOTClassifier
+from classifier import Classifier
 from image_list import ImageList, mixup_data
 from moco.builder import AdaMoCo, AdaMixCo, hwc_MoCo
 from moco.loader import NCropsTransform
@@ -542,9 +542,6 @@ def train_target_domain(args):
     if True: 
         src_model = Classifier(args.model_src, train_target, checkpoint_path)
         momentum_model = Classifier(args.model_src, train_target, checkpoint_path)
-    # else: 
-    #     SHOTClassifier
-    #     SHOTClassifier
         
     
     # val_transform = get_augmentation("test")
@@ -1229,7 +1226,7 @@ def confi_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, 
 
         # d_mask[:, 1:] = d_mask[:, 1:] * clean_confi # (B, K)
         # mask[:,1:] = mask[:,1:] * d_mask[:, 1:] # (B, K) 
-        # mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
+        mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
         logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
     elif contrast_type == "nearest" and pseudo_labels is not None:
         mask = torch.ones_like(logits_ins, dtype=torch.bool)
