@@ -6,14 +6,12 @@ print_freq: 10
 # loss
 contrast_type: "class_aware" # ["nearest", "class_aware"]
 ce_type: "reduction_none" # ["standard", "reduction_none"]
+use_mixup_ws: False
+use_proto_loss_v2: True
 alpha: 1.0
 beta: 1.0
 eta: 1.0
-add_cluster_loss : false
-use_momory_bank : False
 add_gt_in_bank : True
-use_sim_regular : false
-add_mixup_loss : True
 
 # algo-related stuff
 aug_versions: "wss" # ["w", "ws", "wss", "ss"]
@@ -29,18 +27,11 @@ epoch_labeling: false
 
 do_noise_detect: True
 use_ce_weight: True
-use_mixup_weight: False
-use_mixup_weight_2: True
-use_mixup_regular: False
-mixup_reg_type: "sample"
+use_mixup_weight: True
 
 use_projector_q: False
 use_classfier_q: False
 sep_gmm: False
 use_confidence_instance_loss : False
-use_distance_instance_loss : False
-ignore_instance_loss : False
-proto_instance_loss : False
 # Fro vislized
 return_index : True
-use_conf_filter: True
