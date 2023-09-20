@@ -518,10 +518,8 @@ def train_target_domain(args):
         f"best_{args.data.src_domain}_{args.seed}.pth.tar",
     )
     train_target = (args.data.src_domain != args.data.tgt_domain)
-    if True: 
-        src_model = Classifier(args.model_src, train_target, checkpoint_path)
-        momentum_model = Classifier(args.model_src, train_target, checkpoint_path)
-        
+    src_model = Classifier(args.model_src, train_target, checkpoint_path)
+    momentum_model = Classifier(args.model_src, train_target, checkpoint_path)
     
     # val_transform = get_augmentation("test")
     val_transform = get_augmentation_versions(args, False)
@@ -529,7 +527,6 @@ def train_target_domain(args):
         label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt")
     else: 
         label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_list.txt")
-    
     val_dataset = ImageList(
         image_root=args.data.image_root,
         label_file=label_file,

@@ -6,7 +6,7 @@ print_freq: 10
 # loss
 contrast_type: "nearest" # ["nearest", "class_aware"]
 ce_type: "reduction_none" # ["standard", "reduction_none"]
-use_mixup_ws: True
+use_mixup_ws: False
 use_proto_loss_v2: True
 alpha: 1.0
 beta: 1.0
