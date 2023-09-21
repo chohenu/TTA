@@ -1,8 +1,8 @@
 SRC_MODEL_DIR="/opt/tta/hwc_TTA/output/VISDA-C/source"
 
-PORT=10010
+PORT=10011
 MEMO="VISDAC"
-SUB_MEMO="V1_SEED"
+SUB_MEMO="V1_SEED_AB"
 
 for SEED in 2021 2022 2023
 do
@@ -12,5 +12,6 @@ do
     data.dataset="VISDA-C" data.source_domains="[train]" data.target_domains="[validation]" \
     learn=targetv1.yaml \
     model_src.arch="resnet101" \
-    model_tta.src_log_dir=${SRC_MODEL_DIR}
+    model_tta.src_log_dir=${SRC_MODEL_DIR} \
+    optim.lr=2e-4 
 done

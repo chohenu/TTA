@@ -15,7 +15,7 @@ add_gt_in_bank : True
 
 # algo-related stuff
 aug_versions: "wss" # ["w", "ws", "wss", "ss"]
-val_aug_versions: "ow"
+val_aug_versions: "o"
 dist_type: "cosine" # ["cosine", "euclidean"]
 ce_sup_type: "weak_strong" # ["weak_all", "weak_weak", "weak_strong", "conb_strong_strong", "weak_strong_kl"]
 refine_method: "nearest_neighbors" #"nearest_feat" #["conf_based_nearest_neighbors", "nearest_feat", "nearest_neighbors"]

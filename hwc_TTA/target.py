@@ -61,8 +61,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     for data in iterator:
         images, labels, idxs = data
         imgs = images[0].to("cuda")
-        wimgs = images[1].permute(1,0,2,3,4) if (use_loop := images[1].ndim > 4)else images[1]
-        wimgs = wimgs.to("cuda")
+        # wimgs = images[1].permute(1,0,2,3,4) if (use_loop := images[1].ndim > 4)else images[1]
 
         # (B, D) x (D, K) -> (B, K)
         feats, logits_cls = model(imgs, banks, idxs, cls_only=True)
@@ -71,19 +70,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         # project_feats.append(F.normalize(projector(feats), dim=1))
         cluster_labels.append(F.softmax(clustering(feats), dim=1))
         logits.append(logits_cls)
-
-        # aug data
-        if use_loop: 
-            stack_output = [model(wimg, banks, idxs, cls_only=True) for wimg in wimgs]
-            stack_feats = torch.cat([i[0].unsqueeze(0) for i in stack_output])
-            stack_logits = torch.cat([i[1].unsqueeze(0) for i in stack_output])
-            wfeats = stack_feats[-1]
-            wlogits_cls = stack_logits.mean(axis=0)
-        else:
-            wfeats, wlogits_cls = model(wimgs, banks, idxs, cls_only=True)
-        wfeatures.append(wfeats)
-        wcluster_labels.append(F.softmax(clustering(wfeats), dim=1))
-        wlogits.append(wlogits_cls)
 
         # label and index    
         gt_labels.append(labels)
@@ -94,11 +80,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     # project_feats  = torch.cat(project_feats)
     cluster_labels = torch.cat(cluster_labels)
     logits = torch.cat(logits)
-    
-    # aug data
-    wfeatures = torch.cat(wfeatures)
-    wcluster_labels = torch.cat(wcluster_labels)
-    wlogits = torch.cat(wlogits)
     
     # label and index
     gt_labels = torch.cat(gt_labels).to("cuda")
@@ -111,11 +92,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         cluster_labels = concat_all_gather(cluster_labels)
         logits = concat_all_gather(logits)
 
-        # aug data
-        wfeatures = concat_all_gather(wfeatures)
-        wcluster_labels = concat_all_gather(wcluster_labels)
-        wlogits = concat_all_gather(wlogits)
-
         # label and index
         gt_labels = concat_all_gather(gt_labels)
         indices = concat_all_gather(indices)
@@ -127,11 +103,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         cluster_labels = remove_wrap_arounds(cluster_labels, ranks)
         logits = remove_wrap_arounds(logits, ranks)
 
-        # aug data
-        wfeatures = remove_wrap_arounds(wfeatures, ranks)
-        wcluster_labels = remove_wrap_arounds(wcluster_labels, ranks)
-        wlogits = remove_wrap_arounds(wlogits, ranks)
-
         gt_labels = remove_wrap_arounds(gt_labels, ranks)
         indices = remove_wrap_arounds(indices, ranks)
 
@@ -141,12 +112,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     logging.info(f"Accuracy of direct prediction: {accuracy:.2f}")
     wandb_dict["Test Acc"] = accuracy
     
-    ## 5crop average evaluation
-    wpred_labels = wlogits.argmax(dim=1)
-    accuracy = (wpred_labels == gt_labels).float().mean() * 100
-    logging.info(f"Accuracy of cropping direct prediction: {accuracy:.2f}")
-    
-
     if args.data.dataset == "VISDA-C":
         acc_per_class = per_class_accuracy(
             y_true=gt_labels.cpu().numpy(),
@@ -171,16 +136,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
 
     if args.learn.return_index: 
         banks.update({"index": indices[rand_idxs]})
-    
-    save_diff_bank = True
-    if save_diff_bank:
-        wprobs = F.softmax(wlogits, dim=1)
-        banks.update({"aug_features": wfeatures[rand_idxs][: args.learn.queue_size]})
-        banks.update({"aug_probs":  wprobs[rand_idxs][: args.learn.queue_size]})
-        banks.update({"aug_logit":  wlogits[rand_idxs][: args.learn.queue_size]})
-    
     banks.update({'gm':gm})
-
     
     if args.learn.do_noise_detect:
         logging.info(
@@ -200,7 +156,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         avg_pre_rec = average_precision_score(match_confi.cpu().numpy(), match_label.cpu().numpy())
 
         only_noise_accuracy = (pred_labels[~match_confi] == gt_labels[~match_confi]).float().mean()
-        crop_only_noise_accuracy = (wpred_labels[~match_confi] == gt_labels[~match_confi]).float().mean() # noise 비율에서 accuacry
         
         logging.info(
             f"noise_accuracy: {noise_accuracy}"
@@ -209,7 +164,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         logging.info(f"noise_accuracy: {noise_accuracy}")
         logging.info(f"only_clean_accuracy: {only_clean_accuracy}")
         logging.info(f"only_noise_accuracy: {only_noise_accuracy}")
-        logging.info(f"crop_only_noise_accuracy: {crop_only_noise_accuracy}")
         logging.info(f"roc_auc_score: {context_noise_auc}")
         logging.info(f"noise_precision: {pre}")
         logging.info(f"noise_recall: {rec}")
@@ -228,12 +182,12 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
         # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
         
-    if True and is_master(args):
-        import os
-        save_dir = str(wandb.run.dir)
-        logging.info(f"Saving Memory Bank : {save_dir}")
-        with open(f'{save_dir}/mix_val_{epoch}.pickle','wb') as fw:
-            pickle.dump(banks, fw)
+    # if False and is_master(args):
+    #     import os
+    #     save_dir = str(wandb.run.dir)
+    #     logging.info(f"Saving Memory Bank : {save_dir}")
+    #     with open(f'{save_dir}/mix_val_{epoch}.pickle','wb') as fw:
+    #         pickle.dump(banks, fw)
 
 
     # refine predicted labels
@@ -769,7 +723,6 @@ def train_epoch_sfda(train_loader, model, banks,
             feats_k, logits_k = model.momentum_model(images_k, return_feats=True)
 
         update_labels(banks, idxs, feats_w, logits_w, labels, args)
-        update_aug_labels(banks, idxs, feats_k, logits_k, labels, args)
         
 
         if use_wandb(args):
