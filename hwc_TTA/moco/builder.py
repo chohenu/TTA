@@ -119,11 +119,10 @@ class AdaMoCo(nn.Module):
     def return_membank(self): 
 
         return {'mem_feature': self.mem_feat.cpu().numpy(),
-                'mem_pseudo_labels': self.mem_labels.cpu().numpy(),
-                'mem_gt':self.mem_gt.cpu().numpy()}
+                'mem_pseudo_labels': self.mem_labels.cpu().numpy()}
 
     @torch.no_grad()
-    def update_memory(self, keys, pseudo_labels, gt_labels):
+    def update_memory(self, keys, pseudo_labels):
         """
         Update features and corresponding pseudo labels
         """
@@ -138,7 +137,6 @@ class AdaMoCo(nn.Module):
         idxs_replace = torch.arange(start, end).cuda() % self.K
         self.mem_feat[:, idxs_replace] = keys.T
         self.mem_labels[idxs_replace] = pseudo_labels
-        self.mem_gt[idxs_replace] = gt_labels
         self.queue_ptr = end % self.K
 
     @torch.no_grad()
@@ -282,9 +280,6 @@ class hwc_MoCo(nn.Module):
         self.register_buffer(
             "mem_labels", torch.randint(0, src_model.num_classes, (K,))
         )
-        self.register_buffer(
-            "mem_gt", torch.randint(0, src_model.num_classes, (K,))
-        )
 
         self.register_buffer(
             "mem_probs", torch.rand(K, src_model.num_classes)
@@ -301,51 +296,9 @@ class hwc_MoCo(nn.Module):
         if checkpoint_path:
             self.load_from_checkpoint(checkpoint_path)
 
-        self.cluster_loss = nn.KLDivLoss(size_average=False)
-
-        self.sce_loss = SCELoss(1, 1, src_model.num_classes)
         self.args = args
-    def fit_gmm(self, banks): 
-        labels = self.mem_labels.long()
-        centers = F.normalize(self.mem_probs.T.mm(self.mem_feat.T), dim=1)
-        context_assigments_logits = self.mem_feat.T.mm(centers.T) / 0.25 # sim feature with center
-        context_assigments = F.softmax(context_assigments_logits, dim=1)
-        # labels model argmax
-        # distance_label = F.argmax(context_assigments,axis=1)[1]
-        losses = - context_assigments[torch.arange(labels.size(0)), labels] # select target cluster distance
-        losses = losses.cpu().numpy()[:, np.newaxis]
-        losses = (losses - losses.min()) / (losses.max() - losses.min()) # normalize (min,max)
-        losses = np.nan_to_num(losses)
-        labels = labels.cpu().numpy()
+        self.confidence = None 
         
-        from sklearn.mixture import GaussianMixture
-        confidence = np.zeros((losses.shape[0],))
-        banks['gm'].fit(losses)
-        pdf = banks['gm'].predict_proba(losses)
-        confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(banks['gm'].means_)]
-        confidence = torch.from_numpy(confidence).float().cuda()
-        self.confidence = confidence
-        self.losses = losses
-        self.distance_pseudo = torch.argmax(context_assigments, axis=1)
-
-    def check_accuracy(self,): 
-        match_confi = self.confidence > 0.5
-        match_label = self.mem_labels == self.mem_gt
-        noise_accuracy = (match_confi == match_label).float().mean()
-
-        # only_clean_accuracy = ((match_confi == True) & (match_label == True)).float().mean()
-        only_clean_accuracy = (self.mem_gt[match_confi] == self.mem_labels[match_confi]).float().mean()
-        only_noise_accuracy = (self.mem_gt[~match_confi] == self.mem_labels[~match_confi]).float().mean()
-
-        logging.info(f"model_noise_accuracy: {noise_accuracy}")
-        logging.info(f"model_only_clean_accuracy: {only_clean_accuracy}")
-        logging.info(f"model_only_noise_accuracy: {only_noise_accuracy}")
-
-        log_dict = {"model_noise_accuracy" : noise_accuracy}
-        log_dict.update({"model_only_clean_accuracy" : only_clean_accuracy})
-        log_dict.update({"model_only_noise_accuracy" : only_noise_accuracy})
-        return log_dict
-
     def find_confidence(self, banks): 
         origin_idx = torch.where(self.mem_index.reshape(-1,1)==banks['index'])[1]
         self.confidence = banks['confidence'][origin_idx]
@@ -377,18 +330,16 @@ class hwc_MoCo(nn.Module):
     def return_membank(self): 
 
         return {'mem_feature': self.mem_feat.cpu().numpy(),
-                'mem_pseudo_labels': self.mem_labels.cpu().numpy(),
-                'mem_gt':self.mem_gt.cpu().numpy()}
+                'mem_pseudo_labels': self.mem_labels.cpu().numpy()}
 
     @torch.no_grad()
-    def update_memory(self, keys, pseudo_labels, gt_labels, probs, index):
+    def update_memory(self, keys, pseudo_labels, probs, index):
         """
         Update features and corresponding pseudo labels
         """
         # gather keys before updating queue
         keys = concat_all_gather(keys)
         pseudo_labels = concat_all_gather(pseudo_labels)
-        gt_labels = concat_all_gather(gt_labels.to('cuda'))
         probs = concat_all_gather(probs)
         index = concat_all_gather(index)
 
@@ -397,7 +348,6 @@ class hwc_MoCo(nn.Module):
         idxs_replace = torch.arange(start, end).cuda() % self.K
         self.mem_feat[:, idxs_replace] = keys.T
         self.mem_labels[idxs_replace] = pseudo_labels
-        self.mem_gt[idxs_replace] = gt_labels
         self.queue_ptr = end % self.K
         self.mem_probs[idxs_replace, :] = probs
         self.mem_index[idxs_replace] = index
@@ -522,11 +472,6 @@ class hwc_MoCo(nn.Module):
             proto_logits_ins = torch.where(mask, proto_logits_ins, torch.tensor([float("-inf")]).cuda())
             loss_proto = F.cross_entropy(proto_logits_ins, labels_ins)
         else: 
-            proto_sim = q @ F.normalize(prototypes_q, dim=1).T ## (B x feature)x (Features class)= B, class
-            proto_label = torch.argmax(proto_sim, axis=1)
-            if ignore_idx.sum() > 0:
-                loss_proto = torch.nn.CrossEntropyLoss(reduction='none')(proto_sim, proto_label)[ignore_idx].mean()
-            else:
-                loss_proto = (torch.tensor([0.0]).to("cuda")*torch.nn.CrossEntropyLoss(reduction='none')(proto_sim, proto_label)).mean()
+            loss_proto = None
         
         return feats_q, logits_q, logits_ins, k, logits_k, l_neg_near, loss_proto

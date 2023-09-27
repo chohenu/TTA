@@ -211,11 +211,12 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     logging.info(f"Collected {len(pseudo_item_list)} pseudo labels.")
 
     # if epoch > -1 and args.learn.use_confidence_instance_loss: 
-    model.find_confidence(banks)
-    log_dict = model.check_accuracy()
-    wandb_dict['model_noise_accuracy'] =  log_dict['model_noise_accuracy']
-    wandb_dict['model_only_clean_accuracy'] =  log_dict['model_only_clean_accuracy']
-    wandb_dict['model_only_noise_accuracy'] =  log_dict['model_only_noise_accuracy']
+    if "confidence" in banks:    
+        model.find_confidence(banks)
+        log_dict = model.check_accuracy()
+        wandb_dict['model_noise_accuracy'] =  log_dict['model_noise_accuracy']
+        wandb_dict['model_only_clean_accuracy'] =  log_dict['model_only_clean_accuracy']
+        wandb_dict['model_only_noise_accuracy'] =  log_dict['model_only_noise_accuracy']
 
     if use_wandb(args):
         wandb.log(wandb_dict)
@@ -866,22 +867,18 @@ def prototype(banks, features):
     return prototypes, similarity
    
 def prototype_cluster(banks, use_aug_key):
-    if True :
-        if use_aug_key:  
-            f_index = banks['confidence']> 0.5
-            feature_bank = banks['features'][f_index]
-            probs_bank = banks['probs'][f_index]
-        else:
-            # f_index = banks['confidence']
-            feature_bank = banks['features']
-            probs_bank = banks['probs']
-
-            # f_index = banks['confidence']> 0.5
-            # feature_bank = banks['aug_features'][f_index]
-            # probs_bank = banks['aug_probs'][f_index]
+    if use_aug_key:  
+        f_index = banks['confidence']> 0.5
+        feature_bank = banks['features'][f_index]
+        probs_bank = banks['probs'][f_index]
     else:
-        feature_bank = banks["features"]
-        probs_bank = banks["probs"]
+        # f_index = banks['confidence']
+        feature_bank = banks['features']
+        probs_bank = banks['probs']
+
+        # f_index = banks['confidence']> 0.5
+        # feature_bank = banks['aug_features'][f_index]
+        # probs_bank = banks['aug_probs'][f_index]
 
     pseudo_label_bank = probs_bank.argmax(dim=1)
     

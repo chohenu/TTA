@@ -302,6 +302,8 @@ def adjust_learning_rate(optimizer, progress, args):
         decay = 0.5 * (1.0 + math.cos(math.pi * progress / args.learn.full_progress))
     elif args.optim.exp:
         decay = (1 + 10 * progress / args.learn.full_progress) ** -0.75
+    elif args.optim.no_sch:
+        decay = 1.0
     else:
         decay = 1.0
         for milestone in args.optim.schedule:
