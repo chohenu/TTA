@@ -19,6 +19,7 @@ import wandb
 from source import train_source_domain
 from target import train_target_domain as train_target_adacontrast
 from target_online import train_target_domain as online_train_target_adacontrast
+from target_shot import train_target_domain as shot_train_target_adacontrast
 from utils import configure_logger, NUM_CLASSES, use_wandb
 
 @hydra.main(config_path="configs", config_name="root")
@@ -140,10 +141,13 @@ def main_worker(gpu, ngpus_per_node, args):
                         config=dict(args),
                     )
                 # main loop
-                if args.target_algorithm == "ours" and args.learn.epochs > 1:
-                    train_target_adacontrast(args)
-                elif args.learn.epochs == 1: 
-                    online_train_target_adacontrast(args)
+                if args.model_src.type == 'shot':
+                    shot_train_target_adacontrast(args)
+                else:
+                    if args.target_algorithm == "ours" and args.learn.epochs > 1:
+                        train_target_adacontrast(args)
+                    elif args.learn.epochs == 1: 
+                        online_train_target_adacontrast(args)
                 if use_wandb(args):
                     wandb.finish()
 

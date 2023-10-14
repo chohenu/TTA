@@ -112,3 +112,5 @@ class Classifier(nn.Module):
     @property
     def use_weight_norm(self):
         return self.args.weight_norm_dim >= 0
+
+

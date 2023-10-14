@@ -211,12 +211,12 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     logging.info(f"Collected {len(pseudo_item_list)} pseudo labels.")
 
     # if epoch > -1 and args.learn.use_confidence_instance_loss: 
-    if "confidence" in banks:    
-        model.find_confidence(banks)
-        log_dict = model.check_accuracy()
-        wandb_dict['model_noise_accuracy'] =  log_dict['model_noise_accuracy']
-        wandb_dict['model_only_clean_accuracy'] =  log_dict['model_only_clean_accuracy']
-        wandb_dict['model_only_noise_accuracy'] =  log_dict['model_only_noise_accuracy']
+    # if "confidence" in banks:    
+    #     model.find_confidence(banks)
+    #     log_dict = model.check_accuracy()
+    #     wandb_dict['model_noise_accuracy'] =  log_dict['model_noise_accuracy']
+    #     wandb_dict['model_only_clean_accuracy'] =  log_dict['model_only_clean_accuracy']
+    #     wandb_dict['model_only_noise_accuracy'] =  log_dict['model_only_noise_accuracy']
 
     if use_wandb(args):
         wandb.log(wandb_dict)
@@ -658,7 +658,7 @@ def train_epoch_sfda(train_loader, model, banks,
             CE_weight = 1.
         
         # update key features and corresponding pseudo labels
-        model.update_memory(feats_k, pseudo_labels_w, labels, probs_w, idxs)
+        model.update_memory(feats_k, pseudo_labels_w, probs_w, idxs)
         model.find_confidence(banks)
 
         if epoch > 0 and args.learn.use_confidence_instance_loss: 
