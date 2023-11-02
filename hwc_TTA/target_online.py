@@ -40,15 +40,16 @@ from target import (
     get_center_proto,
     prototype_cluster
 )
-
+from sklearn.metrics import precision_recall_fscore_support, average_precision_score
 @torch.no_grad()
-def update_labels(banks, idxs, features, logits, args):
+def update_labels(banks, idxs, features, logits, label, args):
     # 1) avoid inconsistency among DDP processes, and
     # 2) have better estimate with more data points
     if args.distributed:
         idxs = concat_all_gather(idxs)
         features = concat_all_gather(features)
         logits = concat_all_gather(logits)
+        label = concat_all_gather(label.to("cuda"))
     
     probs = F.softmax(logits, dim=1)
     
@@ -58,6 +59,7 @@ def update_labels(banks, idxs, features, logits, args):
     banks["probs"] = torch.cat([banks["probs"], probs], dim=0)
     banks["logit"] = torch.cat([banks["logit"], logits], dim=0)
     banks["index"] = torch.cat([banks["index"], idxs], dim=0)
+    banks["gt"] = torch.cat([banks["gt"], label], dim=0)
     banks["ptr"] = end % len(banks["features"])
 
 def train_target_domain(args):
@@ -120,10 +122,7 @@ def train_target_domain(args):
     val_loader = DataLoader(
         val_dataset, batch_size=256, sampler=val_sampler, num_workers=2
     )
-    if args.learn.sep_gmm:
-        gm = [GaussianMixture(n_components=2, random_state=0) for i in range(model.src_model.num_classes+1)]
-    else: 
-        gm = GaussianMixture(n_components=2, random_state=0,max_iter=50)
+    gm = GaussianMixture(n_components=2, random_state=0,max_iter=50)
     
     banks = {
         "features": torch.tensor([], device='cuda'),
@@ -133,7 +132,8 @@ def train_target_domain(args):
         "ptr": 0,
         'gm':gm
     }
-
+    if args.learn.add_gt_in_bank: 
+        banks.update({"gt": torch.tensor([], device='cuda')})
 
     logging.info("2 - Computed initial pseudo labels")
     
@@ -201,7 +201,7 @@ def train_epoch_sfda(train_loader, model, banks,
     zero_tensor = torch.tensor([0.0]).to("cuda")
     for i, data in enumerate(train_loader):
         # unpack and move data
-        images, _, idxs = data
+        images, labels, idxs = data
         idxs = idxs.to("cuda")
         images_w, images_q, images_k = (
             images[0].to("cuda"),
@@ -210,8 +210,8 @@ def train_epoch_sfda(train_loader, model, banks,
         )
         
         # per-step scheduler
-        step = i + epoch * len(train_loader)
-        adjust_learning_rate(optimizer, step, args)
+        # step = i + epoch * len(train_loader)
+        # adjust_learning_rate(optimizer, step, args)
         
         # weak aug model output
         feats_w, logits_w = model(images_w, banks, idxs, cls_only=True)
@@ -233,22 +233,24 @@ def train_epoch_sfda(train_loader, model, banks,
             cur_probs   = torch.cat([banks['probs'], probs_w], dim=0)
             cur_feats   = torch.cat([banks['features'], feats_w.detach()], dim=0) ## current 
             cur_pseudo  = torch.cat([banks['logit'].argmax(dim=1), pseudo_labels_w], dim=0) ## current 
-            
+            # cur_gt      = torch.cat([banks['gt'], labels], dim=0) ## current 
+
             confidence, _ = noise_detect_cls(cur_probs, cur_pseudo, cur_feats, banks, args)
             origin_idx = torch.arange(banks['probs'].size(0), banks['probs'].size(0)+probs_w.size(0))
             ignore_idx = confidence[origin_idx] < 0.5 # select noise label
-
             args.learn.use_ce_weight = True
             args.learn.use_proto_loss_v2 = True
+            args.learn.do_noise_detect = True
             model.confidence = confidence[torch.arange(banks['probs'].size(0))]
             aug_prototypes = get_center_proto(banks, use_confidence=False)
             prototypes = get_center_proto(banks, use_confidence=False)
         else: 
+            args.learn.use_ce_weight = False
+            args.learn.use_proto_loss_v2 = False
             args.learn.do_noise_detect = False
             aug_prototypes = None
             prototypes = None 
             ignore_idx = None
-            args.learn.use_proto_loss_v2 = False
 
         # strong aug model output 
         feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, loss_proto = model(images_q, banks, idxs, images_k, pseudo_labels_w, epoch, 
@@ -360,9 +362,8 @@ def train_epoch_sfda(train_loader, model, banks,
         # use slow feature to update neighbor space
         with torch.no_grad():
             feats_w, logits_w = model.momentum_model(images_w, return_feats=True)
-            feats_k, logits_k = model.momentum_model(images_k, return_feats=True)
 
-        update_labels(banks, idxs, feats_w, logits_w, args)
+        update_labels(banks, idxs, feats_w, logits_w, labels, args)
         
 
         if use_wandb(args):
@@ -371,11 +372,20 @@ def train_epoch_sfda(train_loader, model, banks,
                 "loss_ins": args.learn.beta * loss_ins.item(),
                 "loss_div": args.learn.eta * loss_div.item(),
                 "loss_mix": loss_mix.item(),
-                "acc_ins": accuracy_ins.item(),
-                
+                "acc_ins": accuracy_ins.item(),    
                 "lr": optimizer.param_groups[0]['lr']
             }
             
+            if use_proto:
+                matching_label = (labels.to("cuda") == logits_w.argmax(dim=1))
+                clean_idx = confidence[origin_idx] > 0.5
+                noise_accuracy = (clean_idx == matching_label).float().mean()
+                # loss_meter.update(noise_accuracy)
+                pre, rec, f1, _ =  precision_recall_fscore_support(matching_label.cpu().numpy(), clean_idx.cpu().numpy(), average='macro')
+                wandb_dict.update({"noise_acc_ins": noise_accuracy.item()})
+                wandb_dict.update({"rec_ins": rec})
+                wandb_dict.update({"pre_ins": pre})
+
             if loss_proto: wandb_dict.update({"loss_proto": loss_proto.item()})
 
             wandb.log(wandb_dict, commit=(i != len(train_loader) - 1))

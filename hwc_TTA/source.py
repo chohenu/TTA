@@ -45,7 +45,7 @@ def get_source_optimizer(model, args):
                 },
                 {
                     "params": extra_params,
-                    "lr": args.optim.lr * 10,
+                    "lr": args.optim.lr * args.optim.time,
                     "momentum": args.optim.momentum,
                     "weight_decay": args.optim.weight_decay,
                     "nesterov": args.optim.nesterov,
@@ -216,6 +216,7 @@ def train_epoch(train_loader, model, optimizer, epoch, args):
 
         if use_wandb(args):
             wandb.log({"Loss": loss_ce.item()}, commit=(i != len(train_loader)))
+            wandb.log({"lr": optimizer.param_groups[0]['lr'],}, commit=(i != len(train_loader)))
 
         # perform one gradient step
         optimizer.zero_grad()

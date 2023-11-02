@@ -9,3 +9,4 @@ exp: false
 no_sch: false
 schedule: [10, 20]
 gamma: 0.2
+time: 10

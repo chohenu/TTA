@@ -16,11 +16,13 @@ import torch.optim
 import torch.multiprocessing as mp
 import wandb
 
-from source import train_source_domain
+from source import train_source_domain as train_single_source
+from multi_source import train_source_domain as train_multi_source
 from target import train_target_domain as train_target_adacontrast
 from target_online import train_target_domain as online_train_target_adacontrast
 from target_shot import train_target_domain as shot_train_target_adacontrast
 from utils import configure_logger, NUM_CLASSES, use_wandb
+from omegaconf import ListConfig
 
 @hydra.main(config_path="configs", config_name="root")
 def main(args):
@@ -116,12 +118,15 @@ def main_worker(gpu, ngpus_per_node, args):
                 wandb.init(
                     project=args.project if args.project else args.data.dataset,
                     group=args.memo,
-                    job_type=src_domain,
+                    job_type= '_'.join(src_domain) if isinstance(src_domain, ListConfig) else src_domain,
                     name=f"seed_{args.seed}",
                     config=dict(args),
                 )
             # main loop
-            train_source_domain(args)
+            if not isinstance(src_domain, ListConfig): 
+                train_single_source(args)
+            else: 
+                train_multi_source(args)
             if use_wandb(args):
                 wandb.finish()
     else:

@@ -39,10 +39,11 @@ import random
 import pickle
 from losses import ClusterLoss
 import pandas as pd
-from sklearn.metrics import roc_auc_score
 import math
+from sklearn.metrics import roc_auc_score
 from sklearn.mixture import GaussianMixture  ## numpy version
 from sklearn.metrics import precision_recall_fscore_support, average_precision_score
+from sklearn.metrics import roc_auc_score, confusion_matrix
 
 @torch.no_grad()
 def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
@@ -153,8 +154,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         only_clean_accuracy = ((match_confi == True) & (match_label == True)).float().mean()
         only_noise_accuracy = ((match_confi == False) & (match_label == True)).float().mean()
         pre, rec, f1, _ =  precision_recall_fscore_support(match_confi.cpu().numpy(), match_label.cpu().numpy(), average='macro')
-        avg_pre_rec = average_precision_score(match_confi.cpu().numpy(), match_label.cpu().numpy())
-
+        avg_pre_rec = average_precision_score(match_label.cpu().numpy(), match_confi.cpu().numpy())
         only_noise_accuracy = (pred_labels[~match_confi] == gt_labels[~match_confi]).float().mean()
         
         logging.info(
@@ -169,8 +169,10 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         logging.info(f"noise_recall: {rec}")
         logging.info(f"noise_f1score: {f1}")
         logging.info(f"noise_avg_recall_precision: {avg_pre_rec}")
+        
         banks.update({"confidence": confidence[rand_idxs]})
         banks.update({"distance": losses[rand_idxs.cpu()]})
+
 
         wandb_dict['noise_accuracy']   = noise_accuracy
         wandb_dict['noise_precision']   = pre
@@ -179,15 +181,17 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         wandb_dict['noise_avg_rec_pre'] = avg_pre_rec
         wandb_dict["only_clean_accuracy"]=only_clean_accuracy
         wandb_dict["only_noise_accuracy"]=only_noise_accuracy
+        wandb_dict["context_noise_auc"]=context_noise_auc
+        
         # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
         # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
         
-    # if False and is_master(args):
-    #     import os
-    #     save_dir = str(wandb.run.dir)
-    #     logging.info(f"Saving Memory Bank : {save_dir}")
-    #     with open(f'{save_dir}/mix_val_{epoch}.pickle','wb') as fw:
-    #         pickle.dump(banks, fw)
+    if False and use_wandb(args):
+        import os
+        save_dir = str(wandb.run.dir)
+        logging.info(f"Saving Memory Bank : {save_dir}")
+        with open(f'{save_dir}/mix_val_{epoch}.pickle','wb') as fw:
+            pickle.dump(banks, fw)
 
 
     # refine predicted labels
@@ -210,13 +214,13 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         pseudo_item_list.append((img_path, int(gt), img_file))
     logging.info(f"Collected {len(pseudo_item_list)} pseudo labels.")
 
-    # if epoch > -1 and args.learn.use_confidence_instance_loss: 
-    # if "confidence" in banks:    
-    #     model.find_confidence(banks)
-    #     log_dict = model.check_accuracy()
-    #     wandb_dict['model_noise_accuracy'] =  log_dict['model_noise_accuracy']
-    #     wandb_dict['model_only_clean_accuracy'] =  log_dict['model_only_clean_accuracy']
-    #     wandb_dict['model_only_noise_accuracy'] =  log_dict['model_only_noise_accuracy']
+    if epoch > -1 and args.learn.use_confidence_instance_loss: 
+        if "confidence" in banks:    
+            model.find_confidence(banks)
+    #         log_dict = model.check_accuracy()
+    #         wandb_dict['model_noise_accuracy'] =  log_dict['model_noise_accuracy']
+    #         wandb_dict['model_only_clean_accuracy'] =  log_dict['model_only_clean_accuracy']
+    #         wandb_dict['model_only_noise_accuracy'] =  log_dict['model_only_noise_accuracy']
 
     if use_wandb(args):
         wandb.log(wandb_dict)
@@ -432,7 +436,7 @@ def get_target_optimizer(model, args):
                 },
                 {
                     "params": extra_params,
-                    "lr": args.optim.lr * 10,
+                    "lr": args.optim.lr * args.optim.time,
                     "momentum": args.optim.momentum,
                     "weight_decay": args.optim.weight_decay,
                     "nesterov": args.optim.nesterov,
@@ -459,6 +463,10 @@ def train_target_domain(args):
             label_file = os.path.join(
                 args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt"
             )
+        elif args.data.dataset.lower() == 'domainnet': 
+            label_file = os.path.join(
+                args.data.image_root, f"{args.data.tgt_domain}_concat.txt"
+            )
         else: 
             label_file = os.path.join(
                 args.data.image_root, f"{args.data.tgt_domain}_list.txt"
@@ -480,6 +488,8 @@ def train_target_domain(args):
     val_transform = get_augmentation_versions(args, False)
     if args.data.dataset.lower() == 'pacs': 
         label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt")
+    elif args.data.dataset.lower() == 'domainnet': 
+        label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_concat.txt")
     else: 
         label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_list.txt")
     val_dataset = ImageList(
@@ -497,6 +507,19 @@ def train_target_domain(args):
         args=args
     ).cuda()
     
+    if args.ckpt_path: 
+        ckpt = torch.load(args.ckpt_path, map_location="cpu")
+        state_dict = dict()
+        for name, param in ckpt["state_dict"].items():
+            # get rid of 'module.' prefix brought by DDP
+            if 'mem' in name : 
+                state_dict[name] = []
+            else: 
+                name = name.replace("module.", "")
+                state_dict[name] = param
+        model.load_state_dict(state_dict, strict=False)
+        logging.info(f"0 - Succes ckpt weight")
+
     if args.distributed:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = CustomDistributedDataParallel(model, device_ids=[args.gpu])
@@ -568,9 +591,10 @@ def train_epoch_sfda(train_loader, model, banks,
     loss_meter = AverageMeter("Loss", ":.4f")
     top1_ins = AverageMeter("SSL-Acc@1", ":6.2f")
     top1_psd = AverageMeter("CLS-Acc@1", ":6.2f")
+    top1_nos = AverageMeter("NOS_Acc@1", ":6.2f")
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, loss_meter, top1_ins, top1_psd],
+        [batch_time, loss_meter, top1_ins, top1_psd, top1_nos],
         prefix=f"Epoch: [{epoch}]",
     )
 
@@ -659,9 +683,9 @@ def train_epoch_sfda(train_loader, model, banks,
         
         # update key features and corresponding pseudo labels
         model.update_memory(feats_k, pseudo_labels_w, probs_w, idxs)
-        model.find_confidence(banks)
 
         if epoch > 0 and args.learn.use_confidence_instance_loss: 
+            model.find_confidence(banks) 
             # sfda instance loss
             q = F.normalize(feats_q, dim=1)
             proto_sim = q @ F.normalize(prototypes, dim=1).T/0.25 ## (B x feature)x (Features class)= B, class 
@@ -725,8 +749,17 @@ def train_epoch_sfda(train_loader, model, banks,
 
         update_labels(banks, idxs, feats_w, logits_w, labels, args)
         
-
         if use_wandb(args):
+            # matching_label = (banks['gt'] == banks['logit'].argmax(dim=1))
+            # clean_idx = banks['confidence'] > 0.5
+            # noise_accuracy = (clean_idx == matching_label).float().mean()
+            # loss_meter.update(noise_accuracy)
+
+            # tn, fp, fn, tp = confusion_matrix(matching_label.cpu().numpy(), clean_idx.cpu().numpy()).ravel()
+
+            # pre = tp/(tp+fp)
+            # rec    = tp/(tp+fn)
+                
             wandb_dict = {
                 "loss_cls": args.learn.alpha * loss_cls.item(),
                 "loss_ins": args.learn.beta * loss_ins.item(),
@@ -734,11 +767,16 @@ def train_epoch_sfda(train_loader, model, banks,
                 "loss_mix": loss_mix.item(),
                 "acc_ins": accuracy_ins.item(),
                 "loss_proto": loss_proto.item(),
-                "lr": optimizer.param_groups[0]['lr']
+                "lr": optimizer.param_groups[0]['lr'],
+                # "rec_ins": rec,
+                # "pre_ins": pre,
             }
+            
+            # wandb_dict.update({'noise_acc':noise_accuracy})
             
             wandb.log(wandb_dict, commit=(i != len(train_loader) - 1))
 
+        
         batch_time.update(time.time() - end)
         end = time.time()
 
@@ -761,20 +799,9 @@ def noise_detect_cls(cluster_labels, labels, features, banks, args, temp=0.25, r
     
     from sklearn.mixture import GaussianMixture
     confidence = np.zeros((losses.shape[0],))
-    if args.learn.sep_gmm:
-        for i in tqdm(range(cluster_labels.size(1)),desc='do class wise noise detect'):
-            mask = labels == i
-            c = losses[mask, :]
-            if len(c) > 2: 
-                banks['gm'][i].fit(c)
-                # gm = GaussianMixture(n_components=2, random_state=2).fit(c)
-                pdf = banks['gm'][i].predict_proba(c)
-                # label이 얼마나 clean한지 정량적으로 표현
-                confidence[mask] = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(banks['gm'][i].means_)]
-    else:
-        banks['gm'].fit(losses)
-        pdf = banks['gm'].predict_proba(losses)
-        confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(banks['gm'].means_)]
+    banks['gm'].fit(losses)
+    pdf = banks['gm'].predict_proba(losses)
+    confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(banks['gm'].means_)]
     confidence = torch.from_numpy(confidence).float().cuda()
     if return_center : 
         # , losses, pdf / pdf.sum(1)[:, np.newaxis]

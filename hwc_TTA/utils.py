@@ -15,8 +15,20 @@ from moco.loader import GaussianBlur
 
 LOG_FORMAT = "[%(levelname)s] %(asctime)s %(filename)s:%(lineno)s %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+NUM_CLASSES = {"domainnet-126": 126, "domainnet":345, "VISDA-C": 12, "OfficeHome":65, "pacs":7 , "office":31 }
 
-NUM_CLASSES = {"domainnet-126": 126, "VISDA-C": 12, "OfficeHome":65, "pacs":7 , "office":31 }
+def get_class_dict(args):
+    if args.data.dataset == 'pacs':
+        TARGET_DICT = {'art_painting':0,'cartoon':1,'photo':2,'sketch':3}
+        RETARGET_DICT = {v:k for k,v in TARGET_DICT.items()}
+    elif args.data.dataset == 'domainnet-126':
+        TARGET_DICT = {'real':0,'sketch':1,'clipart':2,'painting':3}
+        RETARGET_DICT = {v:k for k,v in TARGET_DICT.items()}
+    elif args.data.dataset == 'domainnet':
+        TARGET_DICT = {'real':0,'sketch':1,'clipart':2,'painting':3,'quickdraw':4,'infograph':5}
+        RETARGET_DICT = {v:k for k,v in TARGET_DICT.items()}
+
+    return TARGET_DICT, RETARGET_DICT
 
 
 def configure_logger(rank, log_path=None):
