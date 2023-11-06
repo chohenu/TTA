@@ -24,7 +24,8 @@ queue_size: -1
 epoch_labeling: false
 
 # For Noisy Detector
-
+conf_filter: 0.5
+near: 10
 do_noise_detect: True
 use_ce_weight: True
 use_mixup_weight: True

@@ -655,7 +655,7 @@ def train_epoch_sfda(train_loader, model, banks,
         
         origin_idx = torch.where(idxs.reshape(-1,1)==banks['index'])[1]
         confidence = banks['confidence']
-        ignore_idx = confidence[origin_idx] < 0.5 # select noise label
+        ignore_idx = confidence[origin_idx] < args.learn.conf_filter # select noise label
 
         # weak aug model output
         feats_w, logits_w = model(images_w, banks, idxs, cls_only=True)
@@ -745,6 +745,7 @@ def train_epoch_sfda(train_loader, model, banks,
                 mem_labels=model.mem_labels,
                 logits_neg_near=logits_neg_near,
                 contrast_type=args.learn.contrast_type,
+                args=args
             )
             
         # instance accuracy shown for only one process to give a rough idea
@@ -967,7 +968,7 @@ def calculate_acc(logits, labels):
 def cluster_loss(): 
     return ClusterLoss()
 
-def instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, contrast_type):
+def instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, contrast_type, args):
     # labels: positive key indicators
     labels_ins = torch.zeros(logits_ins.shape[0], dtype=torch.long).cuda()
 
@@ -978,8 +979,8 @@ def instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, contra
         logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
     elif contrast_type == "nearest" and pseudo_labels is not None:
         mask = torch.ones_like(logits_ins, dtype=torch.bool)        
-        _, idx_near = torch.topk(logits_neg_near, k=10, dim=-1, largest=True)
-        mask[:, 1:] = torch.all(pseudo_labels.unsqueeze(1).repeat(1,10).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
+        _, idx_near = torch.topk(logits_neg_near, k=args.learn.near, dim=-1, largest=True)
+        mask[:, 1:] = torch.all(pseudo_labels.unsqueeze(1).repeat(1,args.learn.near).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
         logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
 
     loss = F.cross_entropy(logits_ins, labels_ins)

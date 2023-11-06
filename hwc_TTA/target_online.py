@@ -38,7 +38,16 @@ from target import (
     get_target_optimizer, 
     noise_detect_cls, 
     get_center_proto,
-    prototype_cluster
+    prototype_cluster,
+    instance_loss,
+    calculate_acc,
+    confi_instance_loss,
+    classification_loss,
+    diversification_loss,
+    cross_entropy_loss,
+    mixup_criterion,
+    KLLoss,
+    prototype
 )
 from sklearn.metrics import precision_recall_fscore_support, average_precision_score
 @torch.no_grad()
@@ -326,6 +335,7 @@ def train_epoch_sfda(train_loader, model, banks,
                 mem_labels=model.mem_labels,
                 logits_neg_near=logits_neg_near,
                 contrast_type=args.learn.contrast_type,
+                args=args
             )
             
         # instance accuracy shown for only one process to give a rough idea
@@ -396,153 +406,3 @@ def train_epoch_sfda(train_loader, model, banks,
         if i % args.learn.print_freq == 0:
             progress.display(i)
             
-
-def prototype(banks, features):
-    feature_bank = banks["features"]
-    probs_bank = banks["probs"]
-    
-    prototypes = probs_bank.T.mm(feature_bank)
-    
-    similarity = F.normalize(features, dim=1) @ F.normalize(prototypes, dim=1).T
-    similarity = F.softmax(similarity, dim=1)
-    
-    return prototypes, similarity
-   
-@torch.no_grad()
-def calculate_acc(logits, labels):
-    preds = logits.argmax(dim=1)
-    accuracy = (preds == labels).float().mean() * 100
-    return accuracy
-
-def instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, contrast_type):
-    # labels: positive key indicators
-    labels_ins = torch.zeros(logits_ins.shape[0], dtype=torch.long).cuda()
-
-    # in class_aware mode, do not contrast with same-class samples
-    if contrast_type == "class_aware" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-    elif contrast_type == "nearest" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)        
-        _, idx_near = torch.topk(logits_neg_near, k=10, dim=-1, largest=True)
-        mask[:, 1:] = torch.all(pseudo_labels.unsqueeze(1).repeat(1,10).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-
-    loss = F.cross_entropy(logits_ins, labels_ins)
-
-    accuracy = calculate_acc(logits_ins, labels_ins)
-
-    return loss, accuracy
-
-def confi_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, confidence, proto_sim, contrast_type):
-    # labels: positive key indicators
-    labels_ins = torch.zeros(logits_ins.shape[0], dtype=torch.long).cuda()
-    proto_label = torch.argmax(proto_sim, axis=1) 
-    # in class_aware mode, do not contrast with same-class samples
-    if contrast_type == "class_aware" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        d_mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K) diff : 밀어낸다., same : 무시.
-        d_mask[:, 1:] = proto_label.reshape(-1, 1) != mem_labels  # (B, K)
-        
-        # clean_confi = confidence < 0.8 # (1, K) # Clean : 무시., Noise 밀어낸다.
-
-        clean_confi = confidence > 0.5 # (1, K) # Clean : 밀어낸다., Noise 일단 무시. 
-
-        ## 일단 clean 안에서 본다면 어떻게 될까? 
-        clean_confi = clean_confi.unsqueeze(0).repeat(mask.size(0),1)
-
-        # d_mask[:, 1:] = d_mask[:, 1:] * clean_confi # (B, K)
-        # mask[:,1:] = mask[:,1:] * d_mask[:, 1:] # (B, K) 
-        mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-    elif contrast_type == "nearest" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        
-        _, idx_near = torch.topk(logits_neg_near, k=5, dim=-1, largest=True)
-        mask[:, 1:] *= torch.all(pseudo_labels.unsqueeze(1).repeat(1,5).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-
-    loss = F.cross_entropy(logits_ins, labels_ins)
-
-    accuracy = calculate_acc(logits_ins, labels_ins)
-
-    return loss, accuracy
-
-
-def classification_loss(logits_w, logits_s, target_labels, CE_weight, args):
-    if not args.learn.do_noise_detect: CE_weight = 1.
-    
-    if args.learn.ce_sup_type == "weak_weak":
-        loss_cls = (CE_weight * cross_entropy_loss(logits_w, target_labels, args)).mean()
-        
-    elif args.learn.ce_sup_type == "weak_strong":
-        # loss_cls = (CE_weight * cross_entropy_loss(logits_s, target_labels, args)).mean()
-        loss_cls = (CE_weight * cross_entropy_loss(logits_s, target_labels, args))
-        loss_cls = loss_cls[loss_cls!=0].mean() # ignore zero
-        accuracy = calculate_acc(logits_s, target_labels)
-        
-    elif args.learn.ce_sup_type == "weak_strong_kl":
-        loss_cls = KLLoss(logits_s, target_labels,  epsilon=1e-8, weight_mix=CE_weight)
-        target_labels = torch.argmax(target_labels, dim=1)
-        accuracy = calculate_acc(logits_s, target_labels)
-    else:
-        raise NotImplementedError(
-            f"{args.learn.ce_sup_type} CE supervision type not implemented."
-        )
-    return loss_cls, accuracy
-
-
-def div(logits, epsilon=1e-8):
-    probs = F.softmax(logits, dim=1)
-    probs_mean = probs.mean(dim=0)
-    loss_div = -torch.sum(-probs_mean * torch.log(probs_mean + epsilon))
-
-    return loss_div
-
-def diversification_loss(logits_w, logits_s, args):
-    if args.learn.ce_sup_type == "weak_weak":
-        loss_div = div(logits_w)
-    elif args.learn.ce_sup_type == "weak_strong":
-        loss_div = div(logits_s)
-    else:
-        loss_div = div(logits_w) + div(logits_s)
-
-    return loss_div
-
-
-def cross_entropy_loss(logits, labels, args):
-    if args.learn.ce_type == "standard":
-        return F.cross_entropy(logits, labels)
-    elif args.learn.ce_type == "reduction_none":
-        return torch.nn.CrossEntropyLoss(reduction='none')(logits, labels)
-    raise NotImplementedError(f"{args.learn.ce_type} CE loss is not implemented.")
-
-def entropy_minimization(logits):
-    if len(logits) == 0:
-        return torch.tensor([0.0]).cuda()
-    probs = F.softmax(logits, dim=1)
-    ents = -(probs * probs.log()).sum(dim=1)
-
-    loss = ents.mean()
-    return loss
-
-def mixup_criterion(pred, y_a, y_b, lam, weight_a, weight_b):
-    if weight_a is not None and weight_b is not None:
-        return (weight_a * lam * torch.nn.CrossEntropyLoss(reduction='none')(pred, y_a) 
-                + weight_b * (1 - lam) * torch.nn.CrossEntropyLoss(reduction='none')(pred, y_b)).mean()
-    else:
-        return lam * F.cross_entropy(pred, y_a) + (1 - lam) * F.cross_entropy(pred, y_b)
-
-def symmetric_cross_entropy(x, x_ema):
-    return -0.5*(x_ema.softmax(1) * x.log_softmax(1)).sum(1)-0.5*(x.softmax(1) * x_ema.log_softmax(1)).sum(1)
-
-def KLLoss(input, target, epsilon=1e-8, weight_mix=None):
-    softmax = F.softmax(input, dim=1)
-    kl_loss = (- target * torch.log(softmax + epsilon)).sum(dim=1)
-    if weight_mix is not None:
-        kl_loss *= torch.exp(weight_mix)
-    return kl_loss.mean(dim=0)
