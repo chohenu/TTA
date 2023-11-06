@@ -1,5 +1,5 @@
 SRC_DOMAIN="real"
-TGT_DOMAIN="sketch"
+TGT_DOMAIN="clipart"
 SRC_MODEL_DIR="/opt/tta/hwc_TTA/output/domainnet-126/source"
 
 PORT=10019

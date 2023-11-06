@@ -56,16 +56,21 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     # run inference
     logits, gt_labels, indices, cluster_labels = [], [], [], []
     features, project_feats = [], []
-    wfeatures, wcluster_labels, wlogits = [], [], []
+    mix_features, mix_labels, mix_logit = [], [], []
+    alpha = []
     logging.info("Eval and labeling...")
     iterator = tqdm(dataloader) if is_master(args) else dataloader
     for data in iterator:
         images, labels, idxs = data
         imgs = images[0].to("cuda")
+        inputs_w, targets_w_a, targets_w_b, lam, _ = mixup_data(imgs, labels.to('cuda'), 1, use_cuda=True)
+
         # wimgs = images[1].permute(1,0,2,3,4) if (use_loop := images[1].ndim > 4)else images[1]
 
         # (B, D) x (D, K) -> (B, K)
         feats, logits_cls = model(imgs, banks, idxs, cls_only=True)
+
+        mix_feats, mix_logits_cls = model(inputs_w, banks, idxs, cls_only=True)
         
         features.append(feats)
         # project_feats.append(F.normalize(projector(feats), dim=1))
@@ -75,6 +80,12 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         # label and index    
         gt_labels.append(labels)
         indices.append(idxs)
+
+        ## mixup
+        mix_logit.append(mix_logits_cls)
+        mix_features.append(mix_feats)
+        mix_labels.append(targets_w_b)
+        alpha.append(lam)
 
     # origin
     features = torch.cat(features)
@@ -86,6 +97,13 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     gt_labels = torch.cat(gt_labels).to("cuda")
     indices = torch.cat(indices).to("cuda")
 
+    mix_logit = torch.cat(mix_logit)
+    mix_features = torch.cat(mix_features)
+    mix_labels = torch.cat(mix_labels)
+    alpha = torch.Tensor(np.array(alpha)).to('cuda')
+    # print(alpha)
+    # alpha = torch.cat(alpha)
+    
     if args.distributed:
         # gather results from all ranks
         features = concat_all_gather(features)
@@ -106,6 +124,16 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
 
         gt_labels = remove_wrap_arounds(gt_labels, ranks)
         indices = remove_wrap_arounds(indices, ranks)
+
+        mix_logit = concat_all_gather(mix_logit)
+        mix_features = concat_all_gather(mix_features)
+        mix_labels = concat_all_gather(mix_labels)
+        alpha = concat_all_gather(alpha)
+
+        mix_logit = remove_wrap_arounds(mix_logit,ranks)
+        mix_features = remove_wrap_arounds(mix_features,ranks)
+        mix_labels = remove_wrap_arounds(mix_labels,ranks)
+        alpha = remove_wrap_arounds(alpha, ranks)
 
     assert len(logits) == len(dataloader.dataset)
     pred_labels = logits.argmax(dim=1)
@@ -137,6 +165,12 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
 
     if args.learn.return_index: 
         banks.update({"index": indices[rand_idxs]})
+
+    banks.update({"mix_logit": mix_logit[rand_idxs][: args.learn.queue_size]})
+    banks.update({"mix_features": mix_features[rand_idxs][: args.learn.queue_size]})
+    banks.update({"mix_labels": mix_labels[rand_idxs]})
+    banks.update({"alpha": alpha[rand_idxs]})
+
     banks.update({'gm':gm})
     
     if args.learn.do_noise_detect:
@@ -186,7 +220,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
         # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
         
-    if False and use_wandb(args):
+    if True and use_wandb(args):
         import os
         save_dir = str(wandb.run.dir)
         logging.info(f"Saving Memory Bank : {save_dir}")
@@ -509,6 +543,7 @@ def train_target_domain(args):
     
     if args.ckpt_path: 
         ckpt = torch.load(args.ckpt_path, map_location="cpu")
+        print(ckpt.keys(),'11111')
         state_dict = dict()
         for name, param in ckpt["state_dict"].items():
             # get rid of 'module.' prefix brought by DDP
@@ -569,20 +604,21 @@ def train_target_domain(args):
     logging.info("4 - Created optimizer")
 
     logging.info("Start training...")
-    for epoch in range(args.learn.start_epoch, args.learn.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
+    if not args.do_inference: 
+        for epoch in range(args.learn.start_epoch, args.learn.epochs):
+            if args.distributed:
+                train_sampler.set_epoch(epoch)
+                
+            train_epoch_sfda(train_loader, model, banks,
+                        optimizer, epoch, args)
             
-        train_epoch_sfda(train_loader, model, banks,
-                    optimizer, epoch, args)
-        
-        _, banks = eval_and_label_dataset(val_loader, model, banks, epoch, banks['gm'], args)
+            _, banks = eval_and_label_dataset(val_loader, model, banks, epoch, banks['gm'], args)
 
-    if is_master(args):
-        filename = f"checkpoint_{epoch:04d}_{args.data.src_domain}-{args.data.tgt_domain}-{args.sub_memo}_{args.seed}.pth.tar"
-        save_path = os.path.join(args.log_dir, filename)
-        save_checkpoint(model, optimizer, epoch, save_path=save_path)
-        logging.info(f"Saved checkpoint {save_path}")
+        if is_master(args):
+            filename = f"checkpoint_{epoch:04d}_{args.data.src_domain}-{args.data.tgt_domain}-{args.sub_memo}_{args.seed}.pth.tar"
+            save_path = os.path.join(args.log_dir, filename)
+            save_checkpoint(model, optimizer, epoch, save_path=save_path)
+            logging.info(f"Saved checkpoint {save_path}")
         
 
 def train_epoch_sfda(train_loader, model, banks,

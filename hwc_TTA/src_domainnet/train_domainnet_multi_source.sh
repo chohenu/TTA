@@ -2,15 +2,15 @@
 # SRC_DOMAIN="real,clipart,painting,quickdraw,infograph"
 # SRC_DOMAIN="real,sketch,painting,quickdraw,infograph"
 # SRC_DOMAIN="real,sketch,clipart,quickdraw,infograph"
-# SRC_DOMAIN="real,sketch,clipart,painting,infograph"
-SRC_DOMAIN="real,sketch,clipart,painting,quickdraw"
+SRC_DOMAIN="real,sketch,clipart,painting,infograph"
+# SRC_DOMAIN="real,sketch,clipart,painting,quickdraw"
 
-PORT=10030
+PORT=10033
 MEMO="multi_source"
 
-for SEED in 2021 2022 2023
+for SEED in 2022 2023
 do
-    CUDA_VISIBLE_DEVICES=1,2 python ../main_adacontrast.py train_source=true learn=source \
+    CUDA_VISIBLE_DEVICES=5,6 python ../main_adacontrast.py train_source=true learn=source \
     seed=${SEED} port=${PORT} memo=${MEMO} project="domainnet" \
     data.data_root="/mnt/data" data.workers=8 \
     data.dataset="domainnet" data.source_domains="[[${SRC_DOMAIN}]]" data.target_domains="[sketch,clipart,painting,quickdraw,infograph]" \

@@ -17,6 +17,7 @@ sub_memo: null
 project: null
 use_wandb: True
 ckpt_path: None
+do_inference: False
 # Modular settings
 defaults:
   - model_src: basic
