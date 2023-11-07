@@ -37,3 +37,5 @@ sep_gmm: False
 use_confidence_instance_loss : False
 # Fro vislized
 return_index : True
+
+component : 'all'

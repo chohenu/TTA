@@ -1,15 +1,15 @@
 #!/bin/bash
 PORT=17019
-CUDA=6,7
+CUDA=2,3
 SRC_DOMAINS=(art_painting art_painting art_painting photo        photo   photo)
 TGT_DOMAINS=(cartoon      photo        sketch       art_painting cartoon sketch)
 PORTS=(${PORT} ${PORT} ${PORT} ${PORT} ${PORT} ${PORT} ${PORT})
 CUDAS=(${CUDA} ${CUDA} ${CUDA} ${CUDA} ${CUDA} ${CUDA} ${CUDA})
 SRC_MODEL_DIR="/opt/tta/hwc_TTA/output/pacs/source"
-MEMO="pacs_online"
-SUB_MEMO="online_train"
+MEMO="pacs_online_constant_lr"
+SUB_MEMO="online_train_constant_lr"
 
-for SEED in 2023
+for SEED in 2021 2022 2023
 do
     for i in "${!SRC_DOMAINS[@]}"
     do  
