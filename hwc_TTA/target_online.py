@@ -21,7 +21,6 @@ from moco.builder import hwc_MoCo
 from utils import (
     adjust_learning_rate,
     concat_all_gather,
-    get_distances,
     is_master,
     save_checkpoint,
     use_wandb,
@@ -32,7 +31,6 @@ from utils import (
 import pandas as pd
 from sklearn.mixture import GaussianMixture  ## numpy version
 from target import (
-    eval_and_label_dataset, 
     get_augmentation_versions, 
     refine_predictions, 
     get_target_optimizer, 
@@ -47,9 +45,135 @@ from target import (
     cross_entropy_loss,
     mixup_criterion,
     KLLoss,
-    prototype
+    prototype,
+    remove_wrap_arounds,
+    per_class_accuracy
 )
 from sklearn.metrics import precision_recall_fscore_support, average_precision_score
+@torch.no_grad()
+def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
+    wandb_dict = dict()
+    # make sure to switch to eval mode
+    model.eval()
+    # projector = model.src_model.projector_q
+    clustering = model.src_model.classifier_q
+    
+    # run inference
+    logits, gt_labels, indices, cluster_labels = [], [], [], []
+    features, project_feats = [], []
+    alpha = []
+    logging.info("Eval and labeling...")
+    iterator = tqdm(dataloader) if is_master(args) else dataloader
+    for data in iterator:
+        images, labels, idxs = data
+        imgs = images[0].to("cuda")
+        inputs_w, targets_w_a, targets_w_b, lam, _ = mixup_data(imgs, labels.to('cuda'), 1, use_cuda=True)
+
+        # wimgs = images[1].permute(1,0,2,3,4) if (use_loop := images[1].ndim > 4)else images[1]
+
+        # (B, D) x (D, K) -> (B, K)
+        feats, logits_cls = model(imgs, banks, idxs, cls_only=True)
+
+        mix_feats, mix_logits_cls = model(inputs_w, banks, idxs, cls_only=True)
+        
+        features.append(feats)
+        # project_feats.append(F.normalize(projector(feats), dim=1))
+        cluster_labels.append(F.softmax(clustering(feats), dim=1))
+        logits.append(logits_cls)
+
+        # label and index    
+        gt_labels.append(labels)
+        indices.append(idxs)
+
+    # origin
+    features = torch.cat(features)
+    # project_feats  = torch.cat(project_feats)
+    cluster_labels = torch.cat(cluster_labels)
+    logits = torch.cat(logits)
+    
+    # label and index
+    gt_labels = torch.cat(gt_labels).to("cuda")
+    indices = torch.cat(indices).to("cuda")
+    
+    if args.distributed:
+        # gather results from all ranks
+        features = concat_all_gather(features)
+        # project_feats = concat_all_gather(project_feats)
+        cluster_labels = concat_all_gather(cluster_labels)
+        logits = concat_all_gather(logits)
+
+        # label and index
+        gt_labels = concat_all_gather(gt_labels)
+        indices = concat_all_gather(indices)
+
+        # remove extra wrap-arounds from DDP
+        ranks = len(dataloader.dataset) % dist.get_world_size()
+        features = remove_wrap_arounds(features, ranks)
+        # project_feats = remove_wrap_arounds(project_feats, ranks)
+        cluster_labels = remove_wrap_arounds(cluster_labels, ranks)
+        logits = remove_wrap_arounds(logits, ranks)
+
+        gt_labels = remove_wrap_arounds(gt_labels, ranks)
+        indices = remove_wrap_arounds(indices, ranks)
+
+    assert len(logits) == len(dataloader.dataset)
+    pred_labels = logits.argmax(dim=1)
+    accuracy = (pred_labels == gt_labels).float().mean() * 100
+    logging.info(f"Accuracy of direct prediction: {accuracy:.2f}")
+    wandb_dict["Test Acc"] = accuracy
+    
+    if args.data.dataset == "VISDA-C":
+        acc_per_class = per_class_accuracy(
+            y_true=gt_labels.cpu().numpy(),
+            y_pred=pred_labels.cpu().numpy(),
+        )
+        wandb_dict["Test Avg"] = acc_per_class.mean()
+        wandb_dict["Test Per-class"] = acc_per_class
+        class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 'Horse', 'Knife', 'Motorcycle', 'Person', 'Plant', 'Skateboard', 'Train', 'Truck']
+        class_dict = {idx:name[:3]for idx, name in enumerate(class_name)}
+
+    probs = F.softmax(logits, dim=1)
+    rand_idxs = torch.randperm(len(features)).cuda()
+    banks = {
+        "features": features[rand_idxs][: args.learn.queue_size],
+        "probs": probs[rand_idxs][: args.learn.queue_size],
+        "logit": logits[rand_idxs][: args.learn.queue_size],
+        "ptr": 0,
+        "norm_features": F.normalize(features[rand_idxs][: args.learn.queue_size]),
+    }
+    if args.learn.add_gt_in_bank: 
+        banks.update({"gt": gt_labels[rand_idxs]})
+
+    if args.learn.return_index: 
+        banks.update({"index": indices[rand_idxs]})
+
+    banks.update({'gm':gm})
+    
+    # refine predicted labels
+    pred_labels, _, acc = refine_predictions(
+            model, features, probs, banks, args=args, gt_labels=gt_labels, return_index=args.learn.return_index
+    )
+
+    wandb_dict["Test Post Acc"] = acc
+    if args.data.dataset == "VISDA-C":
+        acc_per_class = per_class_accuracy(
+            y_true=gt_labels.cpu().numpy(),
+            y_pred=pred_labels.cpu().numpy(),
+        )
+        wandb_dict["Test Post Avg"] = acc_per_class.mean()
+        wandb_dict["Test Post Per-class"] = acc_per_class
+
+    pseudo_item_list = []
+    for pred_label, idx in zip(pred_labels, indices):
+        img_path, gt, img_file = dataloader.dataset.item_list[idx]
+        pseudo_item_list.append((img_path, int(gt), img_file))
+    logging.info(f"Collected {len(pseudo_item_list)} pseudo labels.")
+
+    if use_wandb(args):
+        wandb.log(wandb_dict)
+        
+    return pseudo_item_list, banks
+
 @torch.no_grad()
 def update_labels(banks, idxs, features, logits, label, args):
     # 1) avoid inconsistency among DDP processes, and
@@ -226,7 +350,7 @@ def train_epoch_sfda(train_loader, model, banks,
         feats_w, logits_w = model(images_w, banks, idxs, cls_only=True)
         with torch.no_grad():
             probs_w = F.softmax(logits_w, dim=1)
-            if use_proto := first_X_samples >= 1024:
+            if use_proto := first_X_samples >= args.learn.online_length:
                 args.learn.refine_method = "nearest_neighbors"
             else:
                 args.learn.refine_method = None
@@ -237,7 +361,7 @@ def train_epoch_sfda(train_loader, model, banks,
             )
         
         # similarity btw prototype(mean) and feats_w
-        if use_proto: 
+        if use_proto  and args.learn.component != 'pr': 
             # use confidence center
             cur_probs   = torch.cat([banks['probs'], probs_w], dim=0)
             cur_feats   = torch.cat([banks['features'], feats_w.detach()], dim=0) ## current 
@@ -246,7 +370,7 @@ def train_epoch_sfda(train_loader, model, banks,
 
             confidence, _ = noise_detect_cls(cur_probs, cur_pseudo, cur_feats, banks, args)
             origin_idx = torch.arange(banks['probs'].size(0), banks['probs'].size(0)+probs_w.size(0))
-            ignore_idx = confidence[origin_idx] < 0.5 # select noise label
+            ignore_idx = confidence[origin_idx] < args.learn.conf_filter # select noise label
             args.learn.use_ce_weight = True
             args.learn.use_proto_loss_v2 = True
             args.learn.do_noise_detect = True
@@ -354,14 +478,42 @@ def train_epoch_sfda(train_loader, model, banks,
             else zero_tensor
         )
         
-       
-        loss = (
-            args.learn.alpha * loss_cls
-            + args.learn.beta * loss_ins
-            + args.learn.eta * loss_div
-            + loss_mix
-        )
-        if loss_proto: loss += loss_proto
+        if args.learn.component == 'pr': 
+            loss = (
+            )
+
+        elif args.learn.component == 'cr': 
+            loss = (
+                args.learn.alpha * loss_cls
+            )
+
+        elif args.learn.component == 'ccp': 
+            loss = (
+                args.learn.alpha * loss_cls
+                + loss_mix
+            )
+        elif args.learn.component == 'div': 
+            loss = (
+                args.learn.alpha * loss_cls
+                + loss_mix
+                + args.learn.eta * loss_div
+            )
+        elif args.learn.component == 'inst': 
+            loss = (
+                args.learn.alpha * loss_cls
+                + loss_mix
+                + args.learn.eta * loss_div
+                + args.learn.beta * loss_ins
+            )
+
+        elif args.learn.component == 'all': 
+            loss = (
+                args.learn.alpha * loss_cls
+                + loss_mix
+                + args.learn.eta * loss_div
+                + args.learn.beta * loss_ins
+            )
+            if loss_proto: loss += loss_proto
 
         loss_meter.update(loss.item())
 
@@ -388,7 +540,7 @@ def train_epoch_sfda(train_loader, model, banks,
             
             if use_proto:
                 matching_label = (labels.to("cuda") == logits_w.argmax(dim=1))
-                clean_idx = confidence[origin_idx] > 0.5
+                clean_idx = confidence[origin_idx] > args.learn.conf_filter
                 noise_accuracy = (clean_idx == matching_label).float().mean()
                 # loss_meter.update(noise_accuracy)
                 pre, rec, f1, _ =  precision_recall_fscore_support(matching_label.cpu().numpy(), clean_idx.cpu().numpy(), average='macro')
