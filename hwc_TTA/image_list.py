@@ -98,3 +98,17 @@ def mixup_data(x, y, alpha=1.0, use_cuda=True):
     mixed_x = lam * x + (1 - lam) * x[index, :]
     y_a, y_b = y, y[index]
     return mixed_x, y_a, y_b, lam, index
+
+def fix_mixup_data(x, y, fix_lam=0.5, use_cuda=True):
+    '''Returns mixed inputs, pairs of targets, and lambda'''
+    lam = fix_lam
+
+    batch_size = x.size()[0]
+    if use_cuda:
+        index = torch.randperm(batch_size).cuda()
+    else:
+        index = torch.randperm(batch_size)
+
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam, index

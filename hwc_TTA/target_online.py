@@ -480,6 +480,7 @@ def train_epoch_sfda(train_loader, model, banks,
         
         if args.learn.component == 'pr': 
             loss = (
+                args.learn.alpha * loss_cls
             )
 
         elif args.learn.component == 'cr': 
@@ -538,7 +539,7 @@ def train_epoch_sfda(train_loader, model, banks,
                 "lr": optimizer.param_groups[0]['lr']
             }
             
-            if use_proto:
+            if use_proto  and args.learn.component != 'pr':
                 matching_label = (labels.to("cuda") == logits_w.argmax(dim=1))
                 clean_idx = confidence[origin_idx] > args.learn.conf_filter
                 noise_accuracy = (clean_idx == matching_label).float().mean()

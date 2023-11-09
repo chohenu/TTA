@@ -16,7 +16,7 @@ import wandb
 import numpy as np
 
 from classifier import Classifier
-from image_list import ImageList, mixup_data
+from image_list import ImageList, mixup_data, fix_mixup_data
 from moco.builder import hwc_MoCo
 from moco.loader import NCropsTransform
 from utils import (
@@ -56,14 +56,14 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     # run inference
     logits, gt_labels, indices, cluster_labels = [], [], [], []
     features, project_feats = [], []
-    mix_features, mix_labels, mix_logit = [], [], []
+    mix_features, mix_labels, mix_logit, mix_index = [], [], [], []
     alpha = []
     logging.info("Eval and labeling...")
     iterator = tqdm(dataloader) if is_master(args) else dataloader
     for data in iterator:
         images, labels, idxs = data
         imgs = images[0].to("cuda")
-        inputs_w, targets_w_a, targets_w_b, lam, _ = mixup_data(imgs, labels.to('cuda'), 1, use_cuda=True)
+        inputs_w, targets_w_a, targets_w_b, lam, mix_idx = fix_mixup_data(imgs, labels.to('cuda'), fix_lam=0.5, use_cuda=True)
 
         # wimgs = images[1].permute(1,0,2,3,4) if (use_loop := images[1].ndim > 4)else images[1]
 
@@ -85,7 +85,8 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         mix_logit.append(mix_logits_cls)
         mix_features.append(mix_feats)
         mix_labels.append(targets_w_b)
-        alpha.append(lam)
+        mix_index.append(torch.Tensor(idxs[mix_idx.cpu().numpy()]))
+        alpha.append(torch.Tensor(np.repeat(lam,idxs.shape[0])))
 
     # origin
     features = torch.cat(features)
@@ -100,7 +101,9 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     mix_logit = torch.cat(mix_logit)
     mix_features = torch.cat(mix_features)
     mix_labels = torch.cat(mix_labels)
-    alpha = torch.Tensor(np.array(alpha)).to('cuda')
+    # alpha = torch.Tensor(np.array(alpha)).to('cuda')
+    alpha = torch.cat(alpha).to('cuda')
+    mix_index = torch.cat(mix_index).to("cuda")
     # print(alpha)
     # alpha = torch.cat(alpha)
     
@@ -129,11 +132,13 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         mix_features = concat_all_gather(mix_features)
         mix_labels = concat_all_gather(mix_labels)
         alpha = concat_all_gather(alpha)
+        mix_index = concat_all_gather(mix_index)
 
         mix_logit = remove_wrap_arounds(mix_logit,ranks)
         mix_features = remove_wrap_arounds(mix_features,ranks)
         mix_labels = remove_wrap_arounds(mix_labels,ranks)
         alpha = remove_wrap_arounds(alpha, ranks)
+        mix_index = remove_wrap_arounds(mix_index, ranks)
 
     assert len(logits) == len(dataloader.dataset)
     pred_labels = logits.argmax(dim=1)
@@ -170,7 +175,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     banks.update({"mix_features": mix_features[rand_idxs][: args.learn.queue_size]})
     banks.update({"mix_labels": mix_labels[rand_idxs]})
     banks.update({"alpha": alpha[rand_idxs]})
-
+    banks.update({"mix_index": mix_index[rand_idxs]})
     banks.update({'gm':gm})
     
     if args.learn.do_noise_detect:
@@ -205,6 +210,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         logging.info(f"noise_avg_recall_precision: {avg_pre_rec}")
         
         banks.update({"confidence": confidence[rand_idxs]})
+        banks.update({"mix_confidence": confidence[mix_index][rand_idxs]})
         banks.update({"distance": losses[rand_idxs.cpu()]})
 
 
