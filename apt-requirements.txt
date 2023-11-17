@@ -1,7 +1,6 @@
-# Ubuntu 20.04 학습 환경에서 사용되는 apt 패키지.
+# Ubuntu 20.04
 
 # Essential packages.
-libjemalloc2  # Ubuntu 18에서는 libjemalloc1을 사용할 것.
 libjpeg-turbo8
 libpng16-16
 openssh-server
