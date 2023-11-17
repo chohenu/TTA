@@ -2,9 +2,6 @@ This repo is follow by https://github.com/mariodoebler/test-time-adaptation
 
 # Test-Time Adaptation 
 
-해당 레포는 Test-Time Adaptation을 위한 코드를 보여준다.
-
-
     
 ## Prerequisites
 To use the repository, we provide a conda environment.
