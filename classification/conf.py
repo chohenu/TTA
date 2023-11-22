@@ -188,6 +188,21 @@ _C.ADACONTRAST.CE_SUP_TYPE = "weak_strong" # ["weak_all", "weak_weak", "weak_str
 _C.ADACONTRAST.REFINE_METHOD = "nearest_neighbors"
 _C.ADACONTRAST.NUM_NEIGHBORS = 10
 
+# --------------------------------- Ours options --------------------- #
+_C.ADACONTRAST = CfgNode()
+
+_C.ADACONTRAST.QUEUE_SIZE = 16384
+_C.ADACONTRAST.CONTRAST_TYPE = "nearest"
+_C.ADACONTRAST.CE_TYPE = "standard" # ["standard", "symmetric", "smoothed", "soft"]
+_C.ADACONTRAST.ALPHA = 1.0  # lambda for classification loss
+_C.ADACONTRAST.BETA = 1.0   # lambda for instance loss
+_C.ADACONTRAST.ETA = 1.0    # lambda for diversity loss
+
+_C.ADACONTRAST.DIST_TYPE = "cosine" # ["cosine", "euclidean"]
+_C.ADACONTRAST.CE_SUP_TYPE = "weak_strong" # ["weak_all", "weak_weak", "weak_strong", "self_all"]
+_C.ADACONTRAST.REFINE_METHOD = "nearest_neighbors"
+_C.ADACONTRAST.NUM_NEIGHBORS = 10
+
 # --------------------------------- LAME options ----------------------------- #
 _C.LAME = CfgNode()
 

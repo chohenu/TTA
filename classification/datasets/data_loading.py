@@ -27,7 +27,7 @@ def get_transform(dataset_name, adaptation):
     :param adaptation: Name of the adaptation method
     :return: transforms
     """
-    if adaptation == "adacontrast" or adaptation == 'twincontrast':
+    if adaptation == "adacontrast" or adaptation == 'ours':
         # adacontrast requires specific transformations
         if dataset_name in {"cifar10", "cifar100", "cifar10_c", "cifar100_c"}:
             transform = get_augmentation_versions(aug_versions="twss", aug_type="moco-v2-light", res_size=32, crop_size=32)

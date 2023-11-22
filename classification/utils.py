@@ -1,6 +1,8 @@
 import torch
 import logging
 import numpy as np
+import torch.distributed as dist
+
 from datasets.imagenet_subsets import IMAGENET_D_MAPPING
 
 
@@ -78,3 +80,15 @@ def get_accuracy(model: torch.nn.Module,
 
     accuracy = correct.item() / len(data_loader.dataset)
     return accuracy, domain_dict
+
+@torch.no_grad()
+def concat_all_gather(tensor):
+    """
+    Performs all_gather operation on the provided tensors.
+    *** Warning ***: torch.distributed.all_gather has no gradient.
+    """
+    tensors_gather = [torch.ones_like(tensor) for _ in range(dist.get_world_size())]
+    dist.all_gather(tensors_gather, tensor, async_op=False)
+
+    output = torch.cat(tensors_gather, dim=0)
+    return output
