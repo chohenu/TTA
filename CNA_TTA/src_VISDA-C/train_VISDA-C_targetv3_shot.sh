@@ -1,5 +1,5 @@
 SEED=2021
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/seed${SEED}/VISDA-C/"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/seed${SEED}/VISDA-C/"
 
 PORT=10014
 MEMO="VISDAC_SHOT_LR"

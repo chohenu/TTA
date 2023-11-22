@@ -1,5 +1,5 @@
 SRC_DOMAIN=$1
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/OfficeHome/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/OfficeHome/source"
 
 PORT=$2
 MEMO="Confidence"

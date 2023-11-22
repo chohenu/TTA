@@ -1,4 +1,4 @@
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/domainnet-126/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/domainnet-126/source"
 
 PORT=10015
 MEMO="DOMAINNET"

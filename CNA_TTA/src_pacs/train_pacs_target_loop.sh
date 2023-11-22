@@ -1,5 +1,5 @@
 SRC_DOMAIN="photo"
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/pacs/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/pacs/source"
 
 PORT=10035
 MEMO="Confidence"

@@ -1,6 +1,6 @@
 SRC_DOMAIN="Art"
 TGT_DOMAIN="Clipart,Product,RealWorld"
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/OfficeHome/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/OfficeHome/source"
 
 PORT=10015
 MEMO="Confidence"

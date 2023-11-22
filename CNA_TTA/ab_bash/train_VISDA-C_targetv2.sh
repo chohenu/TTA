@@ -1,4 +1,4 @@
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/VISDA-C/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/VISDA-C/source"
 
 PORT=10012
 MEMO="VISDAC"

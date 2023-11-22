@@ -1,6 +1,6 @@
 PORT=17014
 CUDA=4,5
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/domainnet-126/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/domainnet-126/source"
 SRC_DOMAINS=(real    real    real     sketch    clipart painting)
 TGT_DOMAINS=(sketch  clipart painting painting  sketch  real    )
 PORTS=(${PORT} ${PORT} ${PORT} ${PORT} ${PORT} ${PORT} ${PORT})

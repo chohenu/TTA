@@ -7,7 +7,7 @@ SRC_DOMAINS=(real_clipart_painting_quickdraw_infograph
             real_sketch_clipart_painting_infograph)
 TGT_DOMAINS=(sketch clipart painting quickdraw infograph)
 
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/domainnet/multi_source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/domainnet/multi_source"
 
 PORT=10029
 MEMO="MSDA_domainnet"

@@ -1,7 +1,7 @@
 SRC_DOMAINS=(art_painting_cartoon_photo art_painting_cartoon_sketch art_painting_photo_sketch cartoon_photo_sketch)
 TGT_DOMAINS=(sketch photo cartoon art_painting)
 
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/pacs/multi_source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/pacs/multi_source"
 
 PORT=10017
 MEMO="MSDA_online"

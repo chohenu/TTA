@@ -1,6 +1,6 @@
 SRC_DOMAIN="real"
 TGT_DOMAIN="clipart"
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/domainnet-126/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/domainnet-126/source"
 
 PORT=10042
 MEMO="VIS_MIXUP_INFER"
@@ -19,5 +19,5 @@ do
     optim.time=1 \
     optim.lr=2e-4 
 done 
-    # ckpt_path=/opt/tta/CNA-TTA/src_domainnet/output/domainnet-126/VIS_MIXUP_TEST/checkpoint_0014_real-clipart-vis_MIXUP_TEST_2022.pth.tar \
+    # ckpt_path=/opt/tta/CNA_TTA/src_domainnet/output/domainnet-126/VIS_MIXUP_TEST/checkpoint_0014_real-clipart-vis_MIXUP_TEST_2022.pth.tar \
     # do_inference=True \

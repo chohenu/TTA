@@ -1,6 +1,6 @@
 SRC_DOMAIN="real"
 TGT_DOMAIN="clipart"
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/domainnet-126/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/domainnet-126/source"
 
 PORT=10019
 MEMO="VIS_NOISE_ACC"

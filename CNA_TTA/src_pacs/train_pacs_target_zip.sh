@@ -4,7 +4,7 @@ SRC_DOMAINS=(art_painting art_painting art_painting photo        photo   photo)
 TGT_DOMAINS=(cartoon      photo        sketch       art_painting cartoon sketch)
 PORTS=(10021 10022 10023 10024 10025 10026)
 CUDAS=(0,1 2,3 4,5 4,5 6,7 6,7)
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/pacs/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/pacs/source"
 
 PORT=10027
 MEMO="Confidence"

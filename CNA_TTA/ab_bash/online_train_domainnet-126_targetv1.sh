@@ -1,4 +1,4 @@
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/domainnet-126/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/domainnet-126/source"
 MEMO="DOMAINNET"
 SUB_MEMO="online_adacontrast_Seed_final"
 PORT=10039

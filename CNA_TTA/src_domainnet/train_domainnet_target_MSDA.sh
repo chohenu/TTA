@@ -1,6 +1,6 @@
 SRC_DOMAIN="sketch_clipart_painting_quickdraw_infograph"
 TGT_DOMAIN="real"
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/domainnet/multi_source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/domainnet/multi_source"
 
 PORT=10029
 MEMO="MSDA_domainnet"

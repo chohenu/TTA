@@ -1,6 +1,6 @@
 SRC_DOMAIN="photo"
 TGT_DOMAIN="cartoon"
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/pacs/source"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/pacs/source"
 
 PORT=10027
 MEMO="Confidence"

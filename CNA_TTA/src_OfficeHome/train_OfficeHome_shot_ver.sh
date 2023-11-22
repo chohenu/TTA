@@ -1,5 +1,5 @@
 SEED=2021
-SRC_MODEL_DIR="/opt/tta/CNA-TTA/output/seed${SEED}/office-home/"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/seed${SEED}/office-home/"
 
 PORT=10019
 MEMO="OfficeHome_LR"
