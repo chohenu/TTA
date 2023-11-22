@@ -72,9 +72,9 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         # wimgs = images[1].permute(1,0,2,3,4) if (use_loop := images[1].ndim > 4)else images[1]
 
         # (B, D) x (D, K) -> (B, K)
-        feats, logits_cls = model(imgs, banks, idxs, cls_only=True)
+        feats, logits_cls = model(imgs, cls_only=True)
 
-        mix_feats, mix_logits_cls = model(inputs_w, banks, idxs, cls_only=True)
+        mix_feats, mix_logits_cls = model(inputs_w, cls_only=True)
         
         features.append(feats)
         # project_feats.append(F.normalize(projector(feats), dim=1))
@@ -347,7 +347,7 @@ def train_epoch_sfda(train_loader, model, banks,
         # adjust_learning_rate(optimizer, step, args)
         
         # weak aug model output
-        feats_w, logits_w = model(images_w, banks, idxs, cls_only=True)
+        feats_w, logits_w = model(images_w, cls_only=True)
         with torch.no_grad():
             probs_w = F.softmax(logits_w, dim=1)
             if use_proto := first_X_samples >= args.learn.online_length:
@@ -397,7 +397,7 @@ def train_epoch_sfda(train_loader, model, banks,
         
         targets_w_mix = lam_w * torch.eye(args.num_clusters).cuda()[targets_w_a] + (1-lam_w) * torch.eye(args.num_clusters).cuda()[targets_w_b]
         
-        feats_w_mix, target_w_mix_logit = model(inputs_w, banks, idxs, cls_only=True)
+        feats_w_mix, target_w_mix_logit = model(inputs_w, cls_only=True)
         
         if args.learn.use_mixup_ws:
         
@@ -408,7 +408,7 @@ def train_epoch_sfda(train_loader, model, banks,
             
             targets_q_mix = lam_q * torch.eye(args.num_clusters).cuda()[targets_q_a] + (1-lam_q) * torch.eye(args.num_clusters).cuda()[targets_q_b]
             
-            feats_q_mix, target_q_mix_logit = model(inputs_q, banks, idxs, cls_only=True)
+            feats_q_mix, target_q_mix_logit = model(inputs_q, cls_only=True)
         
         # similarity btw prototype and mixup input
         if args.learn.use_mixup_weight and args.learn.do_noise_detect:

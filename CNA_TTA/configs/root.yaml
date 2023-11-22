@@ -16,7 +16,7 @@ memo: test
 sub_memo: null
 project: null
 use_wandb: True
-ckpt_path: None
+ckpt_path: False
 do_inference: False
 # Modular settings
 defaults:
