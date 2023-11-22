@@ -16,7 +16,7 @@ from moco.loader import GaussianBlur
 LOG_FORMAT = "[%(levelname)s] %(asctime)s %(filename)s:%(lineno)s %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
-NUM_CLASSES = {"domainnet-126": 126, "VISDA-C": 12, "OfficeHome":65, "pacs":7 }
+NUM_CLASSES = {"domainnet-126": 126, "VISDA-C": 12, "OfficeHome":65, "pacs":7, "domainnet": 345}
 
 
 def configure_logger(rank, log_path=None):
@@ -298,7 +298,9 @@ def adjust_learning_rate(optimizer, progress, args):
     """
     Decay the learning rate based on epoch or iteration.
     """
-    if args.optim.cos:
+    if args.optim.const:
+        decay = 1.0
+    elif args.optim.cos:
         decay = 0.5 * (1.0 + math.cos(math.pi * progress / args.learn.full_progress))
     elif args.optim.exp:
         decay = (1 + 10 * progress / args.learn.full_progress) ** -0.75
