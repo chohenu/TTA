@@ -385,10 +385,8 @@ def train_epoch_sfda(train_loader, model, banks,
             prototypes = None 
             ignore_idx = None
 
-        # strong aug model output 
-        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, loss_proto = model(images_q, banks, idxs, images_k, pseudo_labels_w, epoch, 
-                                                                                            prototypes_q=prototypes, prototypes_k=aug_prototypes, 
-                                                                                            ignore_idx=ignore_idx, args=args)
+        # strong aug model output (self, im_q, im_k=None, cls_only=False, prototypes_q=None, args=None):
+        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, loss_proto = model(images_q, images_k, prototypes_q=prototypes, args=args)
         
         # mixup
         alpha = 1.0
