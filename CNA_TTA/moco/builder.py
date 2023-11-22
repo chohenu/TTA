@@ -235,7 +235,7 @@ class AdaMoCo(nn.Module):
         # dequeue and enqueue will happen outside
         return feats_q, logits_q, logits_ins, k, logits_k
     
-class hwc_MoCo(nn.Module):
+class CNA_MoCo(nn.Module):
     """
     Build a MoCo model with: a query encoder, a key encoder, and a memory bank
     https://arxiv.org/abs/1911.05722
@@ -258,7 +258,7 @@ class hwc_MoCo(nn.Module):
         m: moco momentum of updating key encoder (default: 0.999)
         T: softmax temperature (default: 0.07)
         """
-        super(hwc_MoCo, self).__init__()
+        super(CNA_MoCo, self).__init__()
 
         self.K = K
         self.m = m

@@ -17,7 +17,7 @@ import numpy as np
 
 from classifier import Classifier
 from image_list import ImageList, mixup_data, fix_mixup_data
-from moco.builder import hwc_MoCo
+from moco.builder import CNA_MoCo
 from moco.loader import NCropsTransform
 from utils import (
     adjust_learning_rate,
@@ -537,7 +537,7 @@ def train_target_domain(args):
         label_file=label_file,
         transform=val_transform,
     )
-    model = hwc_MoCo(
+    model = CNA_MoCo(
         src_model,
         momentum_model,
         K=args.model_tta.queue_size,

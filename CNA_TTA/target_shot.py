@@ -18,7 +18,7 @@ import numpy as np
 import shot_network as network
 from shot_network import Classifier
 from image_list import ImageList, mixup_data
-from moco.builder import hwc_MoCo
+from moco.builder import CNA_MoCo
 from utils import (
     adjust_learning_rate,
     concat_all_gather,
@@ -130,7 +130,7 @@ def train_target_domain(args):
         transform=val_transform,
     )
 
-    model = hwc_MoCo(
+    model = CNA_MoCo(
         src_model,
         momentum_model,
         K=args.model_tta.queue_size,

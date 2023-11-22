@@ -8,7 +8,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from classifier import Classifier
 from image_list import ImageList
-from moco.builder import hwc_MoCo
+from moco.builder import CNA_MoCo
 from utils import (
     is_master,
     save_checkpoint,
@@ -195,7 +195,7 @@ def train_target_domain(args):
     src_model = Classifier(args.model_src, False, checkpoint_path)
     momentum_model = Classifier(args.model_src, False, checkpoint_path)
 
-    model = hwc_MoCo(
+    model = CNA_MoCo(
         src_model,
         momentum_model,
         K=args.model_tta.queue_size,
