@@ -4,10 +4,17 @@ __pycache__
 ckpt/
 output/
 datasets/
+CNA_TTA/.ipynb_checkpoints/
+CNA_TTA/output/
+imgs/
+save/
 *png
 
 .vscode/
 .imgs/
 
-cmpark_AdaContrast/
-# thrid_party/
+
+AdaContrast/
+segmentation/
+classification/
+thrid_party/
