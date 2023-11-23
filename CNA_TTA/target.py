@@ -63,15 +63,10 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     for data in iterator:
         images, labels, idxs = data
         imgs = images[0].to("cuda")
-        inputs_w, targets_w_a, targets_w_b, lam, mix_idx = fix_mixup_data(imgs, labels.to('cuda'), fix_lam=0.5, use_cuda=True)
-
-        # wimgs = images[1].permute(1,0,2,3,4) if (use_loop := images[1].ndim > 4)else images[1]
 
         # (B, D) x (D, K) -> (B, K)
         feats, logits_cls = model(imgs, cls_only=True)
 
-        mix_feats, mix_logits_cls = model(inputs_w, cls_only=True)
-        
         features.append(feats)
         # project_feats.append(F.normalize(projector(feats), dim=1))
         cluster_labels.append(F.softmax(clustering(feats), dim=1))
@@ -80,13 +75,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         # label and index    
         gt_labels.append(labels)
         indices.append(idxs)
-
-        ## mixup
-        mix_logit.append(mix_logits_cls)
-        mix_features.append(mix_feats)
-        mix_labels.append(targets_w_b)
-        mix_index.append(torch.Tensor(idxs[mix_idx.cpu().numpy()]))
-        alpha.append(torch.Tensor(np.repeat(lam,idxs.shape[0])))
 
     # origin
     features = torch.cat(features)
@@ -97,15 +85,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     # label and index
     gt_labels = torch.cat(gt_labels).to("cuda")
     indices = torch.cat(indices).to("cuda")
-
-    mix_logit = torch.cat(mix_logit)
-    mix_features = torch.cat(mix_features)
-    mix_labels = torch.cat(mix_labels)
-    # alpha = torch.Tensor(np.array(alpha)).to('cuda')
-    alpha = torch.cat(alpha).to('cuda')
-    mix_index = torch.cat(mix_index).to("cuda")
-    # print(alpha)
-    # alpha = torch.cat(alpha)
     
     if args.distributed:
         # gather results from all ranks
@@ -127,18 +106,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
 
         gt_labels = remove_wrap_arounds(gt_labels, ranks)
         indices = remove_wrap_arounds(indices, ranks)
-
-        mix_logit = concat_all_gather(mix_logit)
-        mix_features = concat_all_gather(mix_features)
-        mix_labels = concat_all_gather(mix_labels)
-        alpha = concat_all_gather(alpha)
-        mix_index = concat_all_gather(mix_index)
-
-        mix_logit = remove_wrap_arounds(mix_logit,ranks)
-        mix_features = remove_wrap_arounds(mix_features,ranks)
-        mix_labels = remove_wrap_arounds(mix_labels,ranks)
-        alpha = remove_wrap_arounds(alpha, ranks)
-        mix_index = remove_wrap_arounds(mix_index, ranks)
 
     assert len(logits) == len(dataloader.dataset)
     pred_labels = logits.argmax(dim=1)
@@ -171,11 +138,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     if args.learn.return_index: 
         banks.update({"index": indices[rand_idxs]})
 
-    banks.update({"mix_logit": mix_logit[rand_idxs][: args.learn.queue_size]})
-    banks.update({"mix_features": mix_features[rand_idxs][: args.learn.queue_size]})
-    banks.update({"mix_labels": mix_labels[rand_idxs]})
-    banks.update({"alpha": alpha[rand_idxs]})
-    banks.update({"mix_index": mix_index[rand_idxs]})
     banks.update({'gm':gm})
     
     if args.learn.do_noise_detect:
@@ -223,10 +185,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         wandb_dict["only_noise_accuracy"]=only_noise_accuracy
         wandb_dict["context_noise_auc"]=context_noise_auc
         
-        # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
-        # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
-        
-    if True and use_wandb(args):
+    if False and use_wandb(args):
         import os
         save_dir = str(wandb.run.dir)
         logging.info(f"Saving Memory Bank : {save_dir}")
@@ -257,10 +216,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     if epoch > -1 and args.learn.use_confidence_instance_loss: 
         if "confidence" in banks:    
             model.find_confidence(banks)
-    #         log_dict = model.check_accuracy()
-    #         wandb_dict['model_noise_accuracy'] =  log_dict['model_noise_accuracy']
-    #         wandb_dict['model_only_clean_accuracy'] =  log_dict['model_only_clean_accuracy']
-    #         wandb_dict['model_only_noise_accuracy'] =  log_dict['model_only_noise_accuracy']
 
     if use_wandb(args):
         wandb.log(wandb_dict)
@@ -724,33 +679,15 @@ def train_epoch_sfda(train_loader, model, banks,
         # update key features and corresponding pseudo labels
         model.update_memory(feats_k, pseudo_labels_w, probs_w, idxs)
 
-        if epoch > 0 and args.learn.use_confidence_instance_loss: 
-            model.find_confidence(banks) 
-            # sfda instance loss
-            q = F.normalize(feats_q, dim=1)
-            proto_sim = q @ F.normalize(prototypes, dim=1).T/0.25 ## (B x feature)x (Features class)= B, class 
-            proto_sim = F.softmax(proto_sim, dim=1)
-            # proto_label = torch.argmax(proto_sim, axis=1) 
-            
-            loss_ins, accuracy_ins = confi_instance_loss(
-                logits_ins=logits_ins,
-                pseudo_labels=pseudo_labels_w,
-                mem_labels=model.mem_labels,
-                logits_neg_near=logits_neg_near,
-                confidence=model.confidence, 
-                proto_sim=proto_sim, 
-                contrast_type=args.learn.contrast_type,
-            )
-        else: 
-            # sfda instance loss
-            loss_ins, accuracy_ins = instance_loss(
-                logits_ins=logits_ins,
-                pseudo_labels=pseudo_labels_w,
-                mem_labels=model.mem_labels,
-                logits_neg_near=logits_neg_near,
-                contrast_type=args.learn.contrast_type,
-                args=args
-            )
+        # sfda instance loss
+        loss_ins, accuracy_ins = instance_loss(
+            logits_ins=logits_ins,
+            pseudo_labels=pseudo_labels_w,
+            mem_labels=model.mem_labels,
+            logits_neg_near=logits_neg_near,
+            contrast_type=args.learn.contrast_type,
+            args=args
+        )
             
         # instance accuracy shown for only one process to give a rough idea
         top1_ins.update(accuracy_ins.item(), len(logits_ins))
@@ -985,64 +922,6 @@ def instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, contra
         mask = torch.ones_like(logits_ins, dtype=torch.bool)        
         _, idx_near = torch.topk(logits_neg_near, k=args.learn.near, dim=-1, largest=True)
         mask[:, 1:] = torch.all(pseudo_labels.unsqueeze(1).repeat(1,args.learn.near).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-
-    loss = F.cross_entropy(logits_ins, labels_ins)
-
-    accuracy = calculate_acc(logits_ins, labels_ins)
-
-    return loss, accuracy
-
-def confi_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, confidence, proto_sim, contrast_type):
-    # labels: positive key indicators
-    labels_ins = torch.zeros(logits_ins.shape[0], dtype=torch.long).cuda()
-    proto_label = torch.argmax(proto_sim, axis=1) 
-    # in class_aware mode, do not contrast with same-class samples
-    if contrast_type == "class_aware" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        d_mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K) diff : 밀어낸다., same : 무시.
-        d_mask[:, 1:] = proto_label.reshape(-1, 1) != mem_labels  # (B, K)
-        
-        # clean_confi = confidence < 0.8 # (1, K) # Clean : 무시., Noise 밀어낸다.
-
-        clean_confi = confidence > 0.5 # (1, K) # Clean : 밀어낸다., Noise 일단 무시. 
-        
-        # clean : True, Noise : 무시
-        # diff class : True, same class: 무시
-        # 이상적인 filtering 코드
-        ## Clean & diff class True :(True , True)
-        ## clean & same clsss 무시  :(True , False)
-        ## Noise & diff class True :(False , True)
-        ## Noise & same class 무시  :(False , False)
-        ## mask * clean_confi -> clean & diff class but noise & diff class 는 안밀어냄
-    
-        ## add로 하게 되어지면 발생하는 일
-        ## Clean & diff class 밀어낸다.
-        ## clean & same clsss 밀어낸다. 
-        ## Noise & diff class 밀어낸다.
-        ## Noise & same class 무시
-        
-        ## multi 하게 되어지면 발생하는 일
-        ## Clean & diff class 밀어낸다.
-        ## clean & same clsss 무시. 
-        ## Noise & diff class 무시.
-        ## Noise & same class 무시
-
-        ## 일단 clean 안에서 본다면 어떻게 될까? 
-        clean_confi = clean_confi.unsqueeze(0).repeat(mask.size(0),1)
-
-        # d_mask[:, 1:] = d_mask[:, 1:] * clean_confi # (B, K)
-        # mask[:,1:] = mask[:,1:] * d_mask[:, 1:] # (B, K) 
-        mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
-        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
-    elif contrast_type == "nearest" and pseudo_labels is not None:
-        mask = torch.ones_like(logits_ins, dtype=torch.bool)
-        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
-        
-        _, idx_near = torch.topk(logits_neg_near, k=5, dim=-1, largest=True)
-        mask[:, 1:] *= torch.all(pseudo_labels.unsqueeze(1).repeat(1,5).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
         logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
 
     loss = F.cross_entropy(logits_ins, labels_ins)

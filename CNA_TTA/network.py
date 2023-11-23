@@ -8,18 +8,6 @@ import math
 import pdb
 import torch.nn.utils.weight_norm as weightNorm
 from collections import OrderedDict
-# from efficientnet_pytorch import EfficientNet
-# from eff_utils import (
-#     round_filters,
-#     round_repeats,
-#     drop_connect,
-#     get_same_padding_conv2d,
-#     get_model_params,
-#     efficientnet_params,
-#     load_pretrained_weights,
-#     Swish,
-#     MemoryEfficientSwish,
-# )
 
 def grl_hook(coeff):
     def fun1(grad):
