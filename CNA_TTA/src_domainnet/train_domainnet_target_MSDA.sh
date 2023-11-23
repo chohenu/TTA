@@ -1,5 +1,5 @@
-# sketch_clipart_painting_quickdraw_infograph 
-
+PORT=10029
+CUDA=1,2,6,7
 SRC_DOMAINS=(real_clipart_painting_quickdraw_infograph 
             real_sketch_painting_quickdraw_infograph 
             real_sketch_clipart_quickdraw_infograph 
@@ -7,12 +7,9 @@ SRC_DOMAINS=(real_clipart_painting_quickdraw_infograph
             real_sketch_clipart_painting_infograph)
 TGT_DOMAINS=(sketch clipart painting quickdraw infograph)
 
-SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/domainnet/multi_source"
-
-PORT=10029
-CUDA=1,2,6,7
 MEMO="MSDA_domainnet"
-SUB_MEMO="MSDA"
+SUB_MEMO="offline"
+SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/domainnet/multi_source"
 
 for SEED in 2021
 do

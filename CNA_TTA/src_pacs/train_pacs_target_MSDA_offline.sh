@@ -14,9 +14,6 @@ do
     data.dataset="pacs" data.source_domains="[${SRC_DOMAIN}]" data.target_domains="[[${TGT_DOMAIN}]]" \
     model_src.arch="resnet18" \
     model_tta.src_log_dir=${SRC_MODEL_DIR} \
-    optim.cos=false \
-    optim.exp=false \
-    optim.no_sch=True \
+    learn.epochs=15 \
     optim.lr=2e-4 \
-    learn.epochs=15
 done 
