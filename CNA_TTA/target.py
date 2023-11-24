@@ -1,6 +1,4 @@
-from copy import deepcopy
 import logging
-from operator import concat
 import os
 import time
 
@@ -31,19 +29,13 @@ from utils import (
     use_wandb,
     AverageMeter,
     CustomDistributedDataParallel,
-    ProgressMeter,
-    get_tsne_map,
+    ProgressMeter
 )
 
-import random
-import pickle
-from losses import ClusterLoss
-import pandas as pd
-import math
 from sklearn.metrics import roc_auc_score
-from sklearn.mixture import GaussianMixture  ## numpy version
+from sklearn.mixture import GaussianMixture
 from sklearn.metrics import precision_recall_fscore_support, average_precision_score
-from sklearn.metrics import roc_auc_score, confusion_matrix
+from sklearn.metrics import roc_auc_score
 
 @torch.no_grad()
 def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
@@ -55,9 +47,8 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     
     # run inference
     logits, gt_labels, indices, cluster_labels = [], [], [], []
-    features, project_feats = [], []
-    mix_features, mix_labels, mix_logit, mix_index = [], [], [], []
-    alpha = []
+    features = []
+    mix_index = []
     logging.info("Eval and labeling...")
     iterator = tqdm(dataloader) if is_master(args) else dataloader
     for data in iterator:
@@ -121,7 +112,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         wandb_dict["Test Avg"] = acc_per_class.mean()
         wandb_dict["Test Per-class"] = acc_per_class
         class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 'Horse', 'Knife', 'Motorcycle', 'Person', 'Plant', 'Skateboard', 'Train', 'Truck']
-        class_dict = {idx:name[:3]for idx, name in enumerate(class_name)}
 
     probs = F.softmax(logits, dim=1)
     rand_idxs = torch.randperm(len(features)).cuda()
@@ -184,13 +174,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         wandb_dict["only_clean_accuracy"]=only_clean_accuracy
         wandb_dict["only_noise_accuracy"]=only_noise_accuracy
         wandb_dict["context_noise_auc"]=context_noise_auc
-        
-    if False and use_wandb(args):
-        import os
-        save_dir = str(wandb.run.dir)
-        logging.info(f"Saving Memory Bank : {save_dir}")
-        with open(f'{save_dir}/mix_val_{epoch}.pickle','wb') as fw:
-            pickle.dump(banks, fw)
 
 
     # refine predicted labels
@@ -543,8 +526,7 @@ def train_target_domain(args):
     train_dataset = ImageList(
         image_root=args.data.image_root,
         label_file=label_file,  # uses pseudo labels
-        transform=train_transform,
-        # pseudo_item_list=pseudo_item_list,
+        transform=train_transform
     )
     train_sampler = DistributedSampler(train_dataset) if args.distributed else None
     train_loader = DataLoader(
@@ -814,7 +796,6 @@ def classification_loss(logits_w, logits_s, target_labels, CE_weight, args):
         loss_cls = (CE_weight * cross_entropy_loss(logits_w, target_labels, args)).mean()
         
     elif args.learn.ce_sup_type == "weak_strong":
-        # loss_cls = (CE_weight * cross_entropy_loss(logits_s, target_labels, args)).mean()
         loss_cls = (CE_weight * cross_entropy_loss(logits_s, target_labels, args))
         loss_cls = loss_cls[loss_cls!=0].mean() # ignore zero
         accuracy = calculate_acc(logits_s, target_labels)

@@ -56,8 +56,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     
     # run inference
     logits, gt_labels, indices, cluster_labels = [], [], [], []
-    features, project_feats = [], []
-    alpha = []
+    features = []
     logging.info("Eval and labeling...")
     iterator = tqdm(dataloader) if is_master(args) else dataloader
     for data in iterator:
@@ -116,7 +115,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         )
         wandb_dict["Test Avg"] = acc_per_class.mean()
         wandb_dict["Test Per-class"] = acc_per_class
-        class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 'Horse', 'Knife', 'Motorcycle', 'Person', 'Plant', 'Skateboard', 'Train', 'Truck']
 
     probs = F.softmax(logits, dim=1)
     rand_idxs = torch.randperm(len(features)).cuda()
@@ -209,7 +207,6 @@ def train_target_domain(args):
     src_model = Classifier(args.model_src, train_target, checkpoint_path)
     momentum_model = Classifier(args.model_src, train_target, checkpoint_path)
     
-    # val_transform = get_augmentation("test")
     val_transform = get_augmentation_versions(args, False)
     if args.data.dataset.lower() == 'pacs': 
         label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt")
