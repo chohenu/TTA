@@ -16,7 +16,7 @@ import numpy as np
 
 from math import pi
 from scipy.special import logsumexp
-import diffdist
+
 import torch.distributed as dist
 
 

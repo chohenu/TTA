@@ -25,6 +25,7 @@ from methods.lame import LAME
 from methods.sar import SAR, SAM
 from methods.rotta import RoTTA
 from methods.twincontrast import TwinContrast
+from methods.ours import hwc_AdaContrast
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,8 @@ def evaluate(description):
         model, param_names = setup_rmt(base_model, num_classes, device)
     elif cfg.MODEL.ADAPTATION == "twincontrast":
         model, param_names = setup_twincontrast(base_model, device)
+    elif cfg.MODEL.ADAPTATION == "ours":
+        model, param_names = setup_ours(base_model, num_classes, device)
     else:
         raise ValueError(f"Adaptation method '{cfg.MODEL.ADAPTATION}' is not supported!")
 
@@ -463,6 +466,33 @@ def setup_rmt(model, num_classes, device):
                     num_samples_warm_up=cfg.RMT.NUM_SAMPLES_WARM_UP)
     return rmt_model, param_names
 
+def setup_ours(model, num_classes, device):
+    model = hwc_AdaContrast.configure_model(model)
+    params, param_names = hwc_AdaContrast.collect_params(model)
+    if cfg.CORRUPTION.DATASET == "domainnet126":
+        optimizer = setup_adacontrast_optimizer(model)
+    else:
+        optimizer = setup_optimizer(params)
+
+    adacontrast_model = hwc_AdaContrast(num_classes, model, optimizer,
+                                    steps=cfg.OPTIM.STEPS,
+                                    episodic=cfg.MODEL.EPISODIC,
+                                    dataset_name=cfg.CORRUPTION.DATASET,
+                                    arch_name=cfg.MODEL.ARCH,
+                                    queue_size=cfg.ADACONTRAST.QUEUE_SIZE,
+                                    momentum=cfg.M_TEACHER.MOMENTUM,
+                                    temperature=cfg.CONTRAST.TEMPERATURE,
+                                    contrast_type=cfg.ADACONTRAST.CONTRAST_TYPE,
+                                    ce_type=cfg.ADACONTRAST.CE_TYPE,
+                                    alpha=cfg.ADACONTRAST.ALPHA,
+                                    beta=cfg.ADACONTRAST.BETA,
+                                    eta=cfg.ADACONTRAST.ETA,
+                                    dist_type=cfg.ADACONTRAST.DIST_TYPE,
+                                    ce_sup_type=cfg.ADACONTRAST.CE_SUP_TYPE,
+                                    refine_method=cfg.ADACONTRAST.REFINE_METHOD,
+                                    num_neighbors=cfg.ADACONTRAST.NUM_NEIGHBORS,
+                                    device=device)
+    return adacontrast_model, param_names
 
 def setup_optimizer(params):
     if cfg.OPTIM.METHOD == 'Adam':
