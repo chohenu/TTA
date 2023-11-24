@@ -8,8 +8,8 @@ import torch.nn as nn
 
 from models.model import get_model
 from utils import get_accuracy, eval_domain_dict
-from conf import cfg, load_cfg_fom_args, get_num_classes, get_domain_sequence
 from datasets.data_loading import get_source_loader, get_test_loader
+from conf import cfg, load_cfg_from_args, get_num_classes, get_domain_sequence
 
 from methods.bn import AlphaBatchNorm, EMABatchNorm
 from methods.tent import Tent
@@ -26,25 +26,94 @@ from methods.sar import SAR, SAM
 from methods.rotta import RoTTA
 from methods.twincontrast import TwinContrast
 from methods.ours import hwc_AdaContrast
-
+## torch multi proceessing 
+import torch.multiprocessing as mp
+import torch
+import builtins
+import torch.distributed as dist
+from utils import CustomDistributedDataParallel, configure_logger
+from torch.utils.data.distributed import DistributedSampler
 
 logger = logging.getLogger(__name__)
-
-
-def evaluate(description):
-    load_cfg_fom_args(description)
+def main():
+    load_cfg_from_args("Evaluation.")
     assert cfg.SETTING in ["reset_each_shift",           # reset the model state after the adaptation to a domain
-                           "continual",                  # train on sequence of domain shifts without knowing when shift occurs
-                           "gradual",                    # sequence of gradually increasing / decreasing domain shifts
-                           "mixed_domains",              # consecutive test samples are likely to originate from different domains
-                           "correlated",                 # sorted by class label
-                           "mixed_domains_correlated",   # mixed domains + sorted by class label
-                           "gradual_correlated",         # gradual domain shifts + sorted by class label
-                           "reset_each_shift_correlated"
-                           ]
+                        "continual",                  # train on sequence of domain shifts without knowing when shift occurs
+                        "gradual",                    # sequence of gradually increasing / decreasing domain shifts
+                        "mixed_domains",              # consecutive test samples are likely to originate from different domains
+                        "correlated",                 # sorted by class label
+                        "mixed_domains_correlated",   # mixed domains + sorted by class label
+                        "gradual_correlated",         # gradual domain shifts + sorted by class label
+                        "reset_each_shift_correlated"
+                        ]
+    logger.info(f"Setting up test-time adaptation method: {cfg.MODEL.ADAPTATION.upper()}")
     
+    # enable adding attributes at runtime
+    if cfg.DIST_URI == "env://" and cfg.WORLD_SIZE == -1:
+        cfg.WORLD_SIZE = int(os.environ["WORLD_SIZE"])
+
+    # cfg.MODEL.CKPT_PATH='/opt/tta/classification/ckpt/domainet126/best_clipart_2020.pth.tar'
+    use_dist = cfg.WORLD_SIZE > 1 or cfg.MULTIPROCESSING_DISTRIBUTED
+
+    ngpus_per_node = torch.cuda.device_count()
+    if cfg.MULTIPROCESSING_DISTRIBUTED:
+        # Since we have ngpus_per_node processes per node, the total world_size
+        # needs to be adjusted accordingly
+        total_world_size = ngpus_per_node * cfg.WORLD_SIZE
+        # Use torch.multiprocessing.spawn to launch distributed processes: the
+        # main_worker process function
+        mp.spawn(evaluate, nprocs=ngpus_per_node, args=(ngpus_per_node, cfg, use_dist, total_world_size))
+    else:
+        # Simply call main_worker function
+        evaluate(cfg.GPU, ngpus_per_node, cfg, use_dist, total_world_size)
+
+def evaluate(gpu, ngpus_per_node, cfg, use_dist, world_size):
+    if hasattr(torch, "set_deterministic"):
+        torch.set_deterministic(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    
+    ### DDP seeting
+    if gpu==0: 
+        gpu=1
+        rank=1
+    elif gpu==1: 
+        gpu=0
+        rank=0
+    logging.info(f"1 - Setting CUDA: {gpu}")
+    # suppress printing if not master
+    if cfg.MULTIPROCESSING_DISTRIBUTED and gpu != 0:
+
+        def print_pass(*args, **kwargs):
+            pass
+
+        builtins.print = print_pass
+    if use_dist:
+        if cfg.DIST_URI == "env://" and cfg.RANK == -1:
+            rank = int(os.environ["RANK"])
+        if cfg.MULTIPROCESSING_DISTRIBUTED:
+            # For multiprocessing distributed training, rank needs to be the
+            # global rank among all the processes
+            rank = cfg.RANK * ngpus_per_node + gpu
+        dist.init_process_group(
+            backend="nccl",
+            init_method=cfg.DIST_URI,
+            world_size=world_size,
+            rank=rank,
+        )
+
+        torch.cuda.set_device(gpu)
+
+        # adjust data settings according to multi-processing
+        
+        test_batch_size = int(cfg.TEST.BATCH_SIZE / ngpus_per_node)
+        test_num_worker = int(
+            (min(cfg.TEST.NUM_WORKERS, os.cpu_count()) + ngpus_per_node - 1) / ngpus_per_node
+        )
+
+    configure_logger(cfg.RANK)
     num_classes = get_num_classes(dataset_name=cfg.CORRUPTION.DATASET)
-    device = torch.device(f"cuda:{cfg.DEVICE}" if torch.cuda.is_available() else "cpu")
+    device = torch.device(f"cuda:{gpu}" if torch.cuda.is_available() else "cpu")
     base_model = get_model(cfg, num_classes, device)
 
     logger.info(f"Setting up test-time adaptation method: {cfg.MODEL.ADAPTATION.upper()}")
@@ -83,9 +152,18 @@ def evaluate(description):
     elif cfg.MODEL.ADAPTATION == "twincontrast":
         model, param_names = setup_twincontrast(base_model, device)
     elif cfg.MODEL.ADAPTATION == "ours":
-        model, param_names = setup_ours(base_model, num_classes, device)
+        momentum_model = get_model(cfg, num_classes, device)
+        model, param_names = setup_ours(base_model,momentum_model, num_classes, device)
     else:
         raise ValueError(f"Adaptation method '{cfg.MODEL.ADAPTATION}' is not supported!")
+
+    model = model.cuda()
+
+    if use_dist:
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model = CustomDistributedDataParallel(model, device_ids=[gpu])
+
+    logging.info(f"1 - Created target model")
 
     # get the test sequence containing the corruptions or domain names
     if cfg.CORRUPTION.DATASET in {"domainnet126"}:
@@ -124,7 +202,8 @@ def evaluate(description):
             logger.warning("not resetting model")
 
         for severity in severities:
-            test_data_loader = get_test_loader(setting=cfg.SETTING,
+            test_data_loader = get_test_loader(cfg=cfg,
+                                                setting=cfg.SETTING,
                                                adaptation=cfg.MODEL.ADAPTATION,
                                                dataset_name=cfg.CORRUPTION.DATASET,
                                                root_dir=cfg.DATA_DIR,
@@ -133,10 +212,10 @@ def evaluate(description):
                                                num_examples=cfg.CORRUPTION.NUM_EX,
                                                domain_names_all=dom_names_all,
                                                alpha_dirichlet=cfg.TEST.ALPHA_DIRICHLET,
-                                               batch_size=cfg.TEST.BATCH_SIZE,
+                                               batch_size=test_batch_size,
                                                shuffle=False,
-                                               workers=min(cfg.TEST.NUM_WORKERS, os.cpu_count()))
-
+                                               workers=test_num_worker)
+            logging.info("3 - Created train/val loader")
             acc, domain_dict = get_accuracy(
                 model, data_loader=test_data_loader, dataset_name=cfg.CORRUPTION.DATASET,
                 domain_name=domain_name, setting=cfg.SETTING, domain_dict=domain_dict, device=device)
@@ -466,15 +545,17 @@ def setup_rmt(model, num_classes, device):
                     num_samples_warm_up=cfg.RMT.NUM_SAMPLES_WARM_UP)
     return rmt_model, param_names
 
-def setup_ours(model, num_classes, device):
+def setup_ours(model, momentum_model, num_classes, device):
     model = hwc_AdaContrast.configure_model(model)
     params, param_names = hwc_AdaContrast.collect_params(model)
     if cfg.CORRUPTION.DATASET == "domainnet126":
         optimizer = setup_adacontrast_optimizer(model)
+        logging.info("4 - Created optimizer")
     else:
         optimizer = setup_optimizer(params)
-
-    adacontrast_model = hwc_AdaContrast(num_classes, model, optimizer,
+    
+    adacontrast_model = hwc_AdaContrast(num_classes, model, momentum_model, optimizer,
+                                    cfg=cfg,
                                     steps=cfg.OPTIM.STEPS,
                                     episodic=cfg.MODEL.EPISODIC,
                                     dataset_name=cfg.CORRUPTION.DATASET,
@@ -512,6 +593,8 @@ def setup_optimizer(params):
 
 
 def setup_adacontrast_optimizer(model):
+    if cfg.DISTRIBUTED:
+        model = model.module
     backbone_params, extra_params = (
         model.src_model.get_params()
         if hasattr(model, "src_model")
@@ -547,5 +630,5 @@ def setup_adacontrast_optimizer(model):
 
 
 if __name__ == '__main__':
-    evaluate('"Evaluation.')
+    main()
 

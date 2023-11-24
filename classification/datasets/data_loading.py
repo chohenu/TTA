@@ -15,6 +15,7 @@ from datasets.imagenet_d_utils import create_symlinks_and_get_imagenet_visda_map
 from datasets.imagenet_dict import map_dict
 from augmentations.transforms_adacontrast import get_augmentation_versions, get_augmentation
 
+from torch.utils.data.distributed import DistributedSampler
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def get_transform(dataset_name, adaptation):
     return transform
 
 
-def get_test_loader(setting, adaptation, dataset_name, root_dir, domain_name, severity, num_examples, domain_names_all, alpha_dirichlet=0, batch_size=128, shuffle=False, workers=4):
+def get_test_loader(cfg, setting, adaptation, dataset_name, root_dir, domain_name, severity, num_examples, domain_names_all, alpha_dirichlet=0, batch_size=128, shuffle=False, workers=4):
     # Fix seed again to ensure that the test sequence is the same for all methods
     random.seed(1)
     np.random.seed(1)
@@ -136,8 +137,12 @@ def get_test_loader(setting, adaptation, dataset_name, root_dir, domain_name, se
             random.shuffle(test_dataset.samples)
     except AttributeError:
         logger.warning("Attribute 'samples' is missing. Continuing without shuffling, sorting or subsampling the files...")
-
-    return torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=workers, drop_last=False)
+    
+    test_sampler = (
+        DistributedSampler(test_dataset, shuffle=False) if True else shuffle
+    )
+    return torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, sampler=test_sampler, num_workers=workers, drop_last=False)
+    # return torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=workers, drop_last=False)
 
 
 def get_source_loader(dataset_name, root_dir, adaptation, batch_size, train_split=True, ckpt_path=None, num_samples=None, percentage=1.0, workers=4):

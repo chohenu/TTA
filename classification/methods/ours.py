@@ -190,7 +190,7 @@ class hwc_AdaMoCo(nn.Module):
         numerator = numerator ** power
         return numerator / torch.sum(numerator, dim=1, keepdim=True)
 
-    def forward(self, im_q, banks, idxs, im_k=None, pseudo_labels_w=None, cls_only=False, prototypes_q=None, use_proto_loss_v2=None):
+    def forward(self, im_q, im_k=None, pseudo_labels_w=None, cls_only=False, prototypes_q=None, use_proto_loss_v2=None):
         """
         Input:
             im_q: a batch of query images
@@ -215,13 +215,13 @@ class hwc_AdaMoCo(nn.Module):
             self._momentum_update_key_encoder()  # update the key encoder
 
             # shuffle for making use of BN
-            # im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
+            im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
 
             k, logits_k = self.momentum_model(im_k, return_feats=True)
             k = F.normalize(k, dim=1)
 
             # undo shuffle
-            # k = self._batch_unshuffle_ddp(k, idx_unshuffle)
+            k = self._batch_unshuffle_ddp(k, idx_unshuffle)
             
         # nn
         l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
@@ -260,7 +260,7 @@ class hwc_AdaMoCo(nn.Module):
 
 
 class hwc_AdaContrast(TTAMethod):
-    def __init__(self, num_classes, model, optimizer, steps, episodic, dataset_name, arch_name, queue_size, momentum, temperature, contrast_type, ce_type, alpha, beta, eta,
+    def __init__(self, num_classes, model, momentum_model, optimizer, cfg, steps, episodic, dataset_name, arch_name, queue_size, momentum, temperature, contrast_type, ce_type, alpha, beta, eta,
                  dist_type, ce_sup_type, refine_method, num_neighbors, device):
         super().__init__(model.to(device), optimizer, steps, episodic, device)
 
@@ -289,11 +289,11 @@ class hwc_AdaContrast(TTAMethod):
 
         if dataset_name != "domainnet126":
             self.src_model = BaseModel(model, arch_name, dataset_name)
+            self.momentum_model = BaseModel(momentum_model, arch_name, dataset_name)
+            # Setup EMA model
         else:
             self.src_model = model
-
-        # Setup EMA model
-        self.momentum_model = self.copy_model(self.src_model)
+            self.momentum_model = momentum_model
 
         self.model = hwc_AdaMoCo(
                         src_model=self.src_model,
@@ -305,6 +305,7 @@ class hwc_AdaContrast(TTAMethod):
                         ).to(self.device)
         
         self.num_classes = num_classes
+        self.cfg = cfg
         
         gm = GaussianMixture(n_components=2, random_state=0,max_iter=50)
 
@@ -319,7 +320,6 @@ class hwc_AdaContrast(TTAMethod):
 
         # note: if the self.model is never reset, like for continual adaptation,
         # then skipping the state copy would save memory
-        self.models = [self.src_model, self.momentum_model]
         self.model_states, self.optimizer_state = \
             self.copy_model_and_optimizer()
 
@@ -355,7 +355,7 @@ class hwc_AdaContrast(TTAMethod):
 
         self.model.train()
         # weak aug model output
-        feats_w, logits_w = self.model(images_w, self.banks, idxs, cls_only=True)
+        feats_w, logits_w = self.model(images_w, cls_only=True)
         with torch.no_grad():
             probs_w = F.softmax(logits_w, dim=1)
             if use_proto := self.first_X_samples >= 1024:
@@ -513,7 +513,11 @@ class hwc_AdaContrast(TTAMethod):
     def update_labels(self, idxs, features, logits):
         # 1) avoid inconsistency among DDP processes, and
         # 2) have better estimate with more data points
-
+        if self.cfg.DISTRIBUTED:
+            idxs = concat_all_gather(idxs)
+            features = concat_all_gather(features)
+            logits = concat_all_gather(logits)
+            
         probs = F.softmax(logits, dim=1)
         start = self.banks["ptr"]
         end = start + len(features)

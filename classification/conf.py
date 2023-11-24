@@ -64,6 +64,16 @@ _C.DESC = ""
 _C.DEVICE = 1
 
 _C.USE_MEMORY_CLUSTER = False
+# ----------------------------- DDP options ------------------------------- #
+
+_C.GPU = 0
+_C.PORT = 10000
+_C.DIST_URI = f"tcp://localhost:{_C.PORT}"
+_C.WORLD_SIZE = 1
+_C.MULTIPROCESSING_DISTRIBUTED = True
+_C.RANK = 0
+_C.DISTRIBUTED = False
+
 # ----------------------------- Model options ------------------------------- #
 _C.MODEL = CfgNode()
 
@@ -309,7 +319,7 @@ def reset_cfg():
     cfg.merge_from_other_cfg(_CFG_DEFAULT)
 
 
-def load_cfg_fom_args(description="Config options."):
+def load_cfg_from_args(description="Config options."):
     """Load config from command line args and set any specified options."""
     current_time = datetime.now().strftime("%y%m%d_%H%M%S")
     parser = argparse.ArgumentParser(description=description)
@@ -393,8 +403,8 @@ def get_num_classes(dataset_name):
 
 
 def get_domain_sequence(ckpt_path):
-    assert ckpt_path.endswith('.pth') or ckpt_path.endswith('.pt')
-    domain = cfg.CKPT_PATH.replace('.pth', '').split(os.sep)[-1].split('_')[1]
+    assert ckpt_path.endswith('.pth') or ckpt_path.endswith('.pt') or ckpt_path.endswith('.tar')
+    domain = ckpt_path.replace('.pth.tar', '').split(os.sep)[-1].split('_')[1]
     mapping = {"real": ["clipart", "painting", "sketch"],
                "clipart": ["sketch", "real", "painting"],
                "painting": ["real", "sketch", "clipart"],

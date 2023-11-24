@@ -4,8 +4,8 @@ import numpy as np
 import torch.distributed as dist
 
 from datasets.imagenet_subsets import IMAGENET_D_MAPPING
-
-
+from torch.nn.parallel import DistributedDataParallel
+import os
 logger = logging.getLogger(__name__)
 
 
@@ -92,3 +92,41 @@ def concat_all_gather(tensor):
 
     output = torch.cat(tensors_gather, dim=0)
     return output
+
+
+class CustomDistributedDataParallel(DistributedDataParallel):
+    """A wrapper class over DDP that relay "module" attribute."""
+
+    def __init__(self, model, **kwargs):
+        super(CustomDistributedDataParallel, self).__init__(model, **kwargs)
+
+    def __getattr__(self, name):
+        try:
+            return super(CustomDistributedDataParallel, self).__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)
+
+LOG_FORMAT = "[%(levelname)s] %(asctime)s %(filename)s:%(lineno)s %(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+NUM_CLASSES = {"domainnet-126": 126, "VISDA-C": 12}
+
+
+def configure_logger(rank, log_path=None):
+    if log_path:
+        log_dir = os.path.dirname(log_path)
+        os.makedirs(log_dir, exist_ok=True)
+
+    # only master process will print & write
+    level = logging.INFO if rank in {-1, 0} else logging.WARNING
+    handlers = [logging.StreamHandler()]
+    if rank in {0, -1} and log_path:
+        handlers.append(logging.FileHandler(log_path, "w"))
+
+    logging.basicConfig(
+        level=level,
+        format=LOG_FORMAT,
+        datefmt=LOG_DATEFMT,
+        handlers=handlers,
+        force=True,
+    )
