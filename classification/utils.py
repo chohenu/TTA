@@ -6,6 +6,7 @@ import torch.distributed as dist
 from datasets.imagenet_subsets import IMAGENET_D_MAPPING
 from torch.nn.parallel import DistributedDataParallel
 import os
+from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 
@@ -50,6 +51,9 @@ def eval_domain_dict(domain_dict, domain_seq=None):
     avg_err = 1 - sum(correct) / sum(num_samples)
     logger.info(f"Average error: {avg_err:.2%}")
 
+def is_master(args):
+    return args.rank % args.ngpus_per_node == 0
+
 
 def get_accuracy(model: torch.nn.Module,
                  data_loader: torch.utils.data.DataLoader,
@@ -64,7 +68,7 @@ def get_accuracy(model: torch.nn.Module,
 
     correct = 0.
     with torch.no_grad():
-        for i, data in enumerate(data_loader):
+        for i, data in tqdm(enumerate(data_loader), total=len(data_loader)):
             imgs, labels = data[0], data[1]
             output = model([img.to(device) for img in imgs]) if isinstance(imgs, list) else model(imgs.to(device))
             predictions = output.argmax(1)

@@ -31,7 +31,7 @@ import torch.multiprocessing as mp
 import torch
 import builtins
 import torch.distributed as dist
-from utils import CustomDistributedDataParallel, configure_logger
+from utils import CustomDistributedDataParallel, configure_logger, is_master
 from torch.utils.data.distributed import DistributedSampler
 
 logger = logging.getLogger(__name__)
@@ -74,12 +74,6 @@ def evaluate(gpu, ngpus_per_node, cfg, use_dist, world_size):
     torch.backends.cudnn.deterministic = True
     
     ### DDP seeting
-    if gpu==0: 
-        gpu=1
-        rank=1
-    elif gpu==1: 
-        gpu=0
-        rank=0
     logging.info(f"1 - Setting CUDA: {gpu}")
     # suppress printing if not master
     if cfg.MULTIPROCESSING_DISTRIBUTED and gpu != 0:
@@ -189,7 +183,7 @@ def evaluate(gpu, ngpus_per_node, cfg, use_dist, world_size):
     errs = []
     errs_5 = []
     domain_dict = {}
-
+    use_tqdm_bar = is_master()
     # start evaluation
     for i_dom, domain_name in enumerate(dom_names_loop):
         if i_dom == 0 or "reset_each_shift" in cfg.SETTING:

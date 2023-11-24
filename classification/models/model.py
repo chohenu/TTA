@@ -15,7 +15,6 @@ from datasets.imagenet_subsets import IMAGENET_A_MASK, IMAGENET_R_MASK, IMAGENET
 
 logger = logging.getLogger(__name__)
 
-
 def get_torchvision_model(model_name, weight_version="IMAGENET1K_V1"):
     """
     Further details can be found here: https://pytorch.org/vision/0.14/models.html
@@ -201,6 +200,7 @@ class BaseModel(torch.nn.Module):
 
     def forward(self, x, return_feats=False):
         # 1) encoder feature
+        print(x.shape,'123123')
         feat = self.encoder(x)
         feat = torch.flatten(feat, 1)
 
