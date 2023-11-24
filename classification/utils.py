@@ -58,8 +58,8 @@ def get_accuracy(model: torch.nn.Module,
                  domain_name: str,
                  setting: str,
                  domain_dict: dict,
-                 device: torch.device = None
-                 use_tqdm:bool =False):
+                 device: torch.device = None,
+                 use_tqdm:bool=False):
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

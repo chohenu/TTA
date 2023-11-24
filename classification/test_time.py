@@ -31,7 +31,7 @@ import torch.multiprocessing as mp
 import torch
 import builtins
 import torch.distributed as dist
-from utils import CustomDistributedDataParallel, configure_logger, is_master
+from utils import CustomDistributedDataParallel, configure_logger
 from torch.utils.data.distributed import DistributedSampler
 
 logger = logging.getLogger(__name__)
