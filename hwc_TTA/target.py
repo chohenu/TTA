@@ -137,6 +137,11 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     if args.learn.return_index: 
         banks.update({"index": indices[rand_idxs]})
     banks.update({'gm':gm})
+    # banks.update({"mix_logit": mix_logit[rand_idxs][: args.learn.queue_size]})
+    # banks.update({"mix_features": mix_features[rand_idxs][: args.learn.queue_size]})
+    # banks.update({"mix_labels": mix_labels[rand_idxs]})
+    # banks.update({"alpha": alpha[rand_idxs]})
+    # banks.update({"mix_index": mix_index[rand_idxs]})
     
     if args.learn.do_noise_detect:
         logging.info(
@@ -181,6 +186,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         wandb_dict["only_noise_accuracy"]=only_noise_accuracy
         # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
         # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
+        # banks.update({"mix_confidence": confidence[mix_index][rand_idxs]})
         
     # if False and is_master(args):
     #     import os
