@@ -22,7 +22,36 @@ To preprocess dataset, we follow same as in [AdaContrast](https://github.com/Dia
 ## Source Training
 To train a source model on each dataset, you can run bash files in src_${dataset} folder.
 
+### Single-Source settting
+```bash
+bash train_${dataset}_source.sh
+```
+
+### Multi-Source setting
+```bash
+bash train_${dataset}_source_MSDA.sh
+```
 
 
 ## Adpatation for Target
 For adaptation for target, you can run bash files in src_${dataset} folder.
+
+### Offline TTA in Single-Source settting
+```bash
+bash train_${dataset}_target_offline.sh
+```
+
+### Online TTA in Single-Source settting
+```bash
+bash train_${dataset}_target_online.sh
+```
+
+### Offline TTA in Multi-Source setting
+```bash
+bash train_${dataset}_target_MSDA_offline.sh
+```
+
+### Online TTA in Multi-Source setting
+```bash
+bash train_${dataset}_target_MSDA_online.sh
+```
