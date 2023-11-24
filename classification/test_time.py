@@ -183,7 +183,7 @@ def evaluate(gpu, ngpus_per_node, cfg, use_dist, world_size):
     errs = []
     errs_5 = []
     domain_dict = {}
-    use_tqdm_bar = is_master()
+    use_tqdm = rank % ngpus_per_node == 0
     # start evaluation
     for i_dom, domain_name in enumerate(dom_names_loop):
         if i_dom == 0 or "reset_each_shift" in cfg.SETTING:
@@ -212,7 +212,7 @@ def evaluate(gpu, ngpus_per_node, cfg, use_dist, world_size):
             logging.info("3 - Created train/val loader")
             acc, domain_dict = get_accuracy(
                 model, data_loader=test_data_loader, dataset_name=cfg.CORRUPTION.DATASET,
-                domain_name=domain_name, setting=cfg.SETTING, domain_dict=domain_dict, device=device)
+                domain_name=domain_name, setting=cfg.SETTING, domain_dict=domain_dict, device=device, use_tqdm=use_tqdm)
 
             err = 1. - acc
             errs.append(err)

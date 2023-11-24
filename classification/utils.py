@@ -51,9 +51,6 @@ def eval_domain_dict(domain_dict, domain_seq=None):
     avg_err = 1 - sum(correct) / sum(num_samples)
     logger.info(f"Average error: {avg_err:.2%}")
 
-def is_master(args):
-    return args.rank % args.ngpus_per_node == 0
-
 
 def get_accuracy(model: torch.nn.Module,
                  data_loader: torch.utils.data.DataLoader,
@@ -61,14 +58,15 @@ def get_accuracy(model: torch.nn.Module,
                  domain_name: str,
                  setting: str,
                  domain_dict: dict,
-                 device: torch.device = None):
+                 device: torch.device = None
+                 use_tqdm:bool =False):
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     correct = 0.
     with torch.no_grad():
-        for i, data in tqdm(enumerate(data_loader), total=len(data_loader)):
+        for i, data in tqdm(enumerate(data_loader)):
             imgs, labels = data[0], data[1]
             output = model([img.to(device) for img in imgs]) if isinstance(imgs, list) else model(imgs.to(device))
             predictions = output.argmax(1)
