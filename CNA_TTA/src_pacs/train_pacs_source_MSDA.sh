@@ -10,7 +10,7 @@ for SEED in 2021 2021 2022
 do
     for i in "${!SRC_DOMAINS[@]}"
     do
-        CUDA_VISIBLE_DEVICES=${CUDA} python main_adacontrast.py train_source=true learn=source \
+        CUDA_VISIBLE_DEVICES=${CUDA} python main.py train_source=true learn=source \
         seed=${SEED} port=${PORT} memo=${MEMO} project="pacs" \
         data.data_root="/mnt/data/" data.workers=8 \
         data.dataset="pacs" data.source_domains="[${SRC_DOMAIN}]" data.target_domains="[art_painting,cartoon,photo,sketch]" \

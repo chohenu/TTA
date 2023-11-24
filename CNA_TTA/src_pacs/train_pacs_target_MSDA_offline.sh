@@ -8,7 +8,7 @@ SUB_MEMO="MULTI_TARGET_NOSCH"
 
 for SEED in 2022
 do
-    CUDA_VISIBLE_DEVICES=3,6 python main_adacontrast.py \
+    CUDA_VISIBLE_DEVICES=3,6 python main.py \
     seed=${SEED} port=${PORT} memo=${MEMO} sub_memo=${SUB_MEMO} project="pacs" \
     data.data_root="/mnt/data" data.workers=8 \
     data.dataset="pacs" data.source_domains="[${SRC_DOMAIN}]" data.target_domains="[[${TGT_DOMAIN}]]" \
