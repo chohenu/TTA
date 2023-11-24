@@ -29,23 +29,19 @@ from utils import (
     ProgressMeter,
 )
 import pandas as pd
-from sklearn.mixture import GaussianMixture  ## numpy version
+from sklearn.mixture import GaussianMixture
 from target import (
     get_augmentation_versions, 
     refine_predictions, 
     get_target_optimizer, 
     noise_detect_cls, 
     get_center_proto,
-    prototype_cluster,
     instance_loss,
-    calculate_acc,
     confi_instance_loss,
     classification_loss,
     diversification_loss,
-    cross_entropy_loss,
     mixup_criterion,
     KLLoss,
-    prototype,
     remove_wrap_arounds,
     per_class_accuracy
 )
@@ -67,17 +63,11 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     for data in iterator:
         images, labels, idxs = data
         imgs = images[0].to("cuda")
-        inputs_w, targets_w_a, targets_w_b, lam, _ = mixup_data(imgs, labels.to('cuda'), 1, use_cuda=True)
-
-        # wimgs = images[1].permute(1,0,2,3,4) if (use_loop := images[1].ndim > 4)else images[1]
 
         # (B, D) x (D, K) -> (B, K)
         feats, logits_cls = model(imgs, cls_only=True)
-
-        mix_feats, mix_logits_cls = model(inputs_w, cls_only=True)
         
         features.append(feats)
-        # project_feats.append(F.normalize(projector(feats), dim=1))
         cluster_labels.append(F.softmax(clustering(feats), dim=1))
         logits.append(logits_cls)
 
@@ -87,7 +77,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
 
     # origin
     features = torch.cat(features)
-    # project_feats  = torch.cat(project_feats)
     cluster_labels = torch.cat(cluster_labels)
     logits = torch.cat(logits)
     
@@ -98,7 +87,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     if args.distributed:
         # gather results from all ranks
         features = concat_all_gather(features)
-        # project_feats = concat_all_gather(project_feats)
         cluster_labels = concat_all_gather(cluster_labels)
         logits = concat_all_gather(logits)
 
@@ -109,7 +97,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         # remove extra wrap-arounds from DDP
         ranks = len(dataloader.dataset) % dist.get_world_size()
         features = remove_wrap_arounds(features, ranks)
-        # project_feats = remove_wrap_arounds(project_feats, ranks)
         cluster_labels = remove_wrap_arounds(cluster_labels, ranks)
         logits = remove_wrap_arounds(logits, ranks)
 
@@ -130,7 +117,6 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         wandb_dict["Test Avg"] = acc_per_class.mean()
         wandb_dict["Test Per-class"] = acc_per_class
         class_name = ['Aeroplane', 'Bicycle', 'Bus', 'Car', 'Horse', 'Knife', 'Motorcycle', 'Person', 'Plant', 'Skateboard', 'Train', 'Truck']
-        class_dict = {idx:name[:3]for idx, name in enumerate(class_name)}
 
     probs = F.softmax(logits, dim=1)
     rand_idxs = torch.randperm(len(features)).cuda()
@@ -277,7 +263,6 @@ def train_target_domain(args):
         image_root=args.data.image_root,
         label_file=label_file,  # uses pseudo labels
         transform=train_transform,
-        # pseudo_item_list=pseudo_item_list,
     )
     train_sampler = DistributedSampler(train_dataset) if args.distributed else None
     train_loader = DataLoader(
@@ -366,7 +351,6 @@ def train_epoch_sfda(train_loader, model, banks,
             cur_probs   = torch.cat([banks['probs'], probs_w], dim=0)
             cur_feats   = torch.cat([banks['features'], feats_w.detach()], dim=0) ## current 
             cur_pseudo  = torch.cat([banks['logit'].argmax(dim=1), pseudo_labels_w], dim=0) ## current 
-            # cur_gt      = torch.cat([banks['gt'], labels], dim=0) ## current 
 
             confidence, _ = noise_detect_cls(cur_probs, cur_pseudo, cur_feats, banks, args)
             origin_idx = torch.arange(banks['probs'].size(0), banks['probs'].size(0)+probs_w.size(0))
@@ -375,13 +359,11 @@ def train_epoch_sfda(train_loader, model, banks,
             args.learn.use_proto_loss_v2 = True
             args.learn.do_noise_detect = True
             model.confidence = confidence[torch.arange(banks['probs'].size(0))]
-            aug_prototypes = get_center_proto(banks, use_confidence=False)
             prototypes = get_center_proto(banks, use_confidence=False)
         else: 
             args.learn.use_ce_weight = False
             args.learn.use_proto_loss_v2 = False
             args.learn.do_noise_detect = False
-            aug_prototypes = None
             prototypes = None 
             ignore_idx = None
 

@@ -53,13 +53,6 @@ class Classifier(nn.Module):
         if checkpoint_path:
             self.load_from_checkpoint(checkpoint_path)
         
-        # if train_target and args.learn.do_noise_detect:
-            # self.projector_q = nn.Sequential(nn.Linear(self._output_dim, self._output_dim),
-            #                                 nn.BatchNorm1d(self._output_dim),
-            #                                 nn.ReLU(inplace=True),
-            #                                 nn.Linear(self._output_dim, int(self._output_dim/2)),
-            #                                 nn.BatchNorm1d(int(self._output_dim/2)),
-            #                                 )
         self.classifier_q = self.fc
     
 
@@ -67,13 +60,6 @@ class Classifier(nn.Module):
         # 1) encoder feature
         feat = self.encoder(x)
         feat = torch.flatten(feat, 1)
-        
-        # if self.args.learn.refine_method == 'detect_noisy':
-        #     project_feat = self.projector_q(feat)
-        #     cluster_label = self.classifier_q(feat)
-        # else: 
-        #     project_feat = None
-        #     cluster_label = None
             
         logits = self.fc(feat)
         

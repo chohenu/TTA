@@ -627,9 +627,7 @@ def train_epoch_sfda(train_loader, model, banks,
             )
         
         # similarity btw prototype(mean) and feats_w
-        aug_prototypes = prototype_cluster(banks, use_aug_key=True)
         prototypes = get_center_proto(banks, use_confidence=False)
-        # aug_prototypes= prototype_cluster(banks, use_aug_key=True)
 
         # strong aug model output 
         feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, loss_proto = model(images_q, images_k, prototypes_q=prototypes, args=args)
@@ -728,15 +726,6 @@ def train_epoch_sfda(train_loader, model, banks,
         update_labels(banks, idxs, feats_w, logits_w, labels, args)
         
         if use_wandb(args):
-            # matching_label = (banks['gt'] == banks['logit'].argmax(dim=1))
-            # clean_idx = banks['confidence'] > 0.5
-            # noise_accuracy = (clean_idx == matching_label).float().mean()
-            # loss_meter.update(noise_accuracy)
-
-            # tn, fp, fn, tp = confusion_matrix(matching_label.cpu().numpy(), clean_idx.cpu().numpy()).ravel()
-
-            # pre = tp/(tp+fp)
-            # rec    = tp/(tp+fn)
                 
             wandb_dict = {
                 "loss_cls": args.learn.alpha * loss_cls.item(),
@@ -745,12 +734,9 @@ def train_epoch_sfda(train_loader, model, banks,
                 "loss_mix": loss_mix.item(),
                 "acc_ins": accuracy_ins.item(),
                 "loss_proto": loss_proto.item(),
-                "lr": optimizer.param_groups[0]['lr'],
-                # "rec_ins": rec,
-                # "pre_ins": pre,
+                "lr": optimizer.param_groups[0]['lr']
             }
             
-            # wandb_dict.update({'noise_acc':noise_accuracy})
             
             wandb.log(wandb_dict, commit=(i != len(train_loader) - 1))
 
@@ -767,8 +753,6 @@ def noise_detect_cls(cluster_labels, labels, features, banks, args, temp=0.25, r
     centers = F.normalize(cluster_labels.T.mm(features), dim=1)
     context_assigments_logits = features.mm(centers.T) / temp # sim feature with center
     context_assigments = F.softmax(context_assigments_logits, dim=1)
-    # labels model argmax
-    # distance_label = F.argmax(context_assigments,axis=1)[1]
     losses = - context_assigments[torch.arange(labels.size(0)), labels] # select target cluster distance
     losses = losses.cpu().numpy()[:, np.newaxis]
     losses = (losses - losses.min()) / (losses.max() - losses.min()) # normalize (min,max)
@@ -782,7 +766,6 @@ def noise_detect_cls(cluster_labels, labels, features, banks, args, temp=0.25, r
     confidence = (pdf / pdf.sum(1)[:, np.newaxis])[:, np.argmin(banks['gm'].means_)]
     confidence = torch.from_numpy(confidence).float().cuda()
     if return_center : 
-        # , losses, pdf / pdf.sum(1)[:, np.newaxis]
         return confidence, losses
     else: 
         return confidence, losses
@@ -797,117 +780,10 @@ def get_center_proto(banks, use_confidence):
 
 
 @torch.no_grad()
-def soft_gmm_clustering(banks, features):
-    
-    feature_bank = banks["features"]
-    probs_bank = banks["probs"]
-    
-    clss_num = probs_bank.size(1)
-    uniform = torch.ones(len(feature_bank),clss_num)/clss_num
-    uniform = uniform.cuda()
-
-    pi = probs_bank.sum(dim=0)
-    mu = torch.matmul(probs_bank.t(),(feature_bank)) # matrix multiple (F,C) center??
-    mu = mu / pi.unsqueeze(dim=-1).expand_as(mu) # normalize first 
-
-    zz, gamma = gmm((feature_bank), pi, mu, uniform)
-    pred_labels = gamma.argmax(dim=1)
-    
-    for round in range(1):
-        pi = gamma.sum(dim=0)
-        mu = torch.matmul(gamma.t(), (feature_bank))
-        mu = mu / pi.unsqueeze(dim=-1).expand_as(mu)
-
-        zz, gamma = gmm((feature_bank), pi, mu, gamma)
-        pred_labels = gamma.argmax(axis=1)
-        
-    prototypes = mu
-    
-    similarity = F.normalize(features, dim=1) @ F.normalize(prototypes, dim=1).T
-    similarity = F.softmax(similarity, dim=1)
-    
-    return prototypes, similarity
-
-@torch.no_grad()
-def gmm(all_fea, pi, mu, all_output):    
-    epsilon = 1e-6
-    Cov = []
-    dist = []
-    log_probs = []
-    
-    for i in range(len(mu)):
-        temp = all_fea - mu[i]
-        predi = all_output[:,i].unsqueeze(dim=-1)
-        Covi = torch.matmul(temp.t(), temp * predi.expand_as(temp)) / (predi.sum()) + epsilon * torch.eye(temp.shape[1]).cuda()
-        try:
-            chol = torch.linalg.cholesky(Covi)
-        except RuntimeError:
-            Covi += epsilon * torch.eye(temp.shape[1]).cuda() * 100
-            chol = torch.linalg.cholesky(Covi)
-        chol_inv = torch.inverse(chol)
-        Covi_inv = torch.matmul(chol_inv.t(), chol_inv)
-        logdet = torch.logdet(Covi)
-        mah_dist = (torch.matmul(temp, Covi_inv) * temp).sum(dim=1)
-        log_prob = -0.5*(Covi.shape[0] * np.log(2*math.pi) + logdet + mah_dist) + torch.log(pi)[i]
-        Cov.append(Covi)
-        log_probs.append(log_prob)
-        dist.append(mah_dist)
-    Cov = torch.stack(Cov, dim=0)
-    dist = torch.stack(dist, dim=0).t()
-    log_probs = torch.stack(log_probs, dim=0).t()
-    zz = log_probs - torch.logsumexp(log_probs, dim=1, keepdim=True).expand_as(log_probs)
-    gamma = torch.exp(zz)
-    
-    return zz, gamma
-
-def prototype(banks, features):
-    feature_bank = banks["features"]
-    probs_bank = banks["probs"]
-    
-    prototypes = probs_bank.T.mm(feature_bank)
-    
-    similarity = F.normalize(features, dim=1) @ F.normalize(prototypes, dim=1).T
-    similarity = F.softmax(similarity, dim=1)
-    
-    return prototypes, similarity
-   
-def prototype_cluster(banks, use_aug_key):
-    if use_aug_key:  
-        f_index = banks['confidence']> 0.5
-        feature_bank = banks['features'][f_index]
-        probs_bank = banks['probs'][f_index]
-    else:
-        # f_index = banks['confidence']
-        feature_bank = banks['features']
-        probs_bank = banks['probs']
-
-        # f_index = banks['confidence']> 0.5
-        # feature_bank = banks['aug_features'][f_index]
-        # probs_bank = banks['aug_probs'][f_index]
-
-    pseudo_label_bank = probs_bank.argmax(dim=1)
-    
-    n_cluster = probs_bank.shape[1]
-    prototypes = []
-    for i in range(n_cluster):
-        idxs = torch.where(pseudo_label_bank==i)[0]
-        if idxs.shape[0] > 0:
-            prototype = feature_bank[idxs].mean(0) # average of samples with same labels
-        else:
-            prototype = torch.full((feature_bank[idxs].mean(0).shape[0],), 1e-8).cuda()
-        prototypes.append(prototype.unsqueeze(0))
-    prototypes = torch.cat(prototypes, dim=0)
-
-    return prototypes
-
-@torch.no_grad()
 def calculate_acc(logits, labels):
     preds = logits.argmax(dim=1)
     accuracy = (preds == labels).float().mean() * 100
     return accuracy
-
-def cluster_loss(): 
-    return ClusterLoss()
 
 def instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, contrast_type, args):
     # labels: positive key indicators

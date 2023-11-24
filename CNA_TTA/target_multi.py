@@ -15,7 +15,7 @@ from utils import (
     CustomDistributedDataParallel,
 )
 
-from sklearn.mixture import GaussianMixture  ## numpy version
+from sklearn.mixture import GaussianMixture
 from target import (
     get_augmentation_versions, 
     eval_and_label_dataset, 
@@ -136,7 +136,6 @@ def load_labels(args, tgt_domain, dataset_idx):
     
     return label_file
 
-# return val_dataset, train_dataset, len(val_dataset)
 
 def train_target_domain(args):
     
@@ -167,9 +166,8 @@ def train_target_domain(args):
             label_file=label_files,  # uses pseudo labels
             tgt_domain=args.data.tgt_domain,
             transform=train_transform,
-            dataset_name=args.data.dataset,
-            # pseudo_item_list=pseudo_item_list,
-        )
+            dataset_name=args.data.dataset
+            )
         
         data_length = len(val_dataset)
         args.learn.queue_size = data_length
@@ -184,8 +182,7 @@ def train_target_domain(args):
         train_dataset = ImageList(
             image_root=args.data.image_root,
             label_file=label_file,  # uses pseudo labels
-            transform=train_transform,
-            # pseudo_item_list=pseudo_item_list,
+            transform=train_transform
         )
 
     checkpoint_path = os.path.join(
