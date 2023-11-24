@@ -1,11 +1,11 @@
-This repo is follow by https://github.com/DianCh/AdaContrast
+This repo is followed by https://github.com/DianCh/AdaContrast
 
 # CNA-TTA: Clean and Noisy Aware Feature Learning within Clusters for Online-Offline Test-Time Adaptation 
 
 ![Main figure](media/main.png)
 
 ## Installation
-To use the repository, we provide a conda environment.
+To use the repository, we provide a Docker container based on conda environment. Please, use the blew Make command for setup envirnoment.
 ```bash
 Make env
 Make over
