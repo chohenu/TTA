@@ -7,9 +7,11 @@ from models.model import ResNetDomainNet126
 
 
 class TTAMethod(nn.Module):
-    def __init__(self, model, optimizer, steps=1, episodic=False, window_length=1, device=None):
+    def __init__(self, model, optimizer=None, steps=1, episodic=False, window_length=1, device=None):
         super().__init__()
         self.model = model
+        # if not momentum_model:
+        #     self.momentum_model = momentum_model
         self.optimizer = optimizer
         self.steps = steps
         assert steps > 0, "requires >= 1 step(s) to forward and update"

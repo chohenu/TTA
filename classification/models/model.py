@@ -298,7 +298,7 @@ def get_model(cfg, num_classes, device):
         elif cfg.CORRUPTION.DATASET == "imagenet_d109":
             base_model = ImageNetXWrapper(base_model, IMAGENET_D109_MASK)
 
-    return base_model.to(device)
+    return base_model
 
 
 def split_up_model(model, arch_name, dataset_name):

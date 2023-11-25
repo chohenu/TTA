@@ -20,6 +20,8 @@ from utils import concat_all_gather
 from methods.base import TTAMethod
 from models.model import BaseModel
 
+from utils import CustomDistributedDataParallel
+
 NUM_CLASSES = {"domainnet-126": 126, "VISDA-C": 12, "OfficeHome":65, "pacs":7 , "office":31 }
 
 class hwc_AdaMoCo(nn.Module):
@@ -260,9 +262,9 @@ class hwc_AdaMoCo(nn.Module):
 
 
 class hwc_AdaContrast(TTAMethod):
-    def __init__(self, num_classes, model, momentum_model, optimizer, cfg, steps, episodic, dataset_name, arch_name, queue_size, momentum, temperature, contrast_type, ce_type, alpha, beta, eta,
+    def __init__(self, num_classes, base_model, momentum_model, optimizer, cfg, steps, episodic, dataset_name, arch_name, queue_size, momentum, temperature, contrast_type, ce_type, alpha, beta, eta,
                  dist_type, ce_sup_type, refine_method, num_neighbors, device):
-        super().__init__(model.to(device), optimizer, steps, episodic, device)
+        super().__init__(base_model.to(device), optimizer, steps, episodic, device)
 
         self.device = device
         # Hyperparameters
@@ -287,13 +289,13 @@ class hwc_AdaContrast(TTAMethod):
         self.steps = steps
         self.episodic = episodic
 
-        if dataset_name != "domainnet126":
-            self.src_model = BaseModel(model, arch_name, dataset_name)
-            self.momentum_model = BaseModel(momentum_model, arch_name, dataset_name)
-            # Setup EMA model
-        else:
-            self.src_model = model
-            self.momentum_model = momentum_model
+        # if dataset_name != "domainnet126":
+        #     self.src_model = BaseModel(model, arch_name, dataset_name)
+        #     self.momentum_model = BaseModel(momentum_model, arch_name, dataset_name)
+        #     # Setup EMA model
+        # else:
+        self.src_model = base_model
+        self.momentum_model = momentum_model
 
         self.model = hwc_AdaMoCo(
                         src_model=self.src_model,
@@ -387,13 +389,11 @@ class hwc_AdaContrast(TTAMethod):
             prototypes = None 
             ignore_idx = None
             use_proto_loss_v2 = False
-        
-
+    
         # strong aug model output 
-        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, loss_proto = self.model(images_q, self.banks, idxs, images_k, pseudo_labels_w, 
+        feats_q, logits_q, logits_ins, feats_k, logits_k, logits_neg_near, loss_proto = self.model(images_q, im_k=images_k, pseudo_labels_w=pseudo_labels_w, 
                                                                                             prototypes_q=prototypes, use_proto_loss_v2=use_proto_loss_v2)
-        del logits_k
-        del feats_q
+ 
         
         # mixup
         alpha = 1.0
@@ -404,9 +404,9 @@ class hwc_AdaContrast(TTAMethod):
         
         targets_w_mix = lam_w * torch.eye(self.num_classes).to(self.device)[targets_w_a] + (1-lam_w) * torch.eye(self.num_classes).to(self.device)[targets_w_b]
         
-        feats_w_mix, target_w_mix_logit = self.model(inputs_w, self.banks, idxs, cls_only=True)
+        feats_w_mix, target_w_mix_logit = self.model(inputs_w, cls_only=True)
         
-        del feats_w_mix
+  
         
         inputs_q, targets_q_a, targets_q_b, lam_q, mix_q_idx = mixup_data(images_q, pseudo_labels_w,
                                                         alpha, self.device, use_cuda=True)
@@ -415,10 +415,9 @@ class hwc_AdaContrast(TTAMethod):
         
         targets_q_mix = lam_q * torch.eye(self.num_classes).to(self.device)[targets_q_a] + (1-lam_q) * torch.eye(self.num_classes).to(self.device)[targets_q_b]
         
-        feats_q_mix, target_q_mix_logit = self.model(inputs_q, self.banks, idxs, cls_only=True)
+        feats_q_mix, target_q_mix_logit = self.model(inputs_q, cls_only=True)
         
-        del feats_q_mix
-        del mix_q_idx
+      
         
         # similarity btw prototype and mixup input
         if do_noise_detect:

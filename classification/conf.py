@@ -262,7 +262,7 @@ _C.SOURCE.PERCENTAGE = 1.0   # [0, 1] possibility to reduce the number of source
 _C.TEST = CfgNode()
 
 # Number of workers for test data loading
-_C.TEST.NUM_WORKERS = 4
+_C.TEST.NUM_WORKERS = 8
 
 # Batch size for evaluation (and updates for norm + tent)
 _C.TEST.BATCH_SIZE = 128
@@ -404,7 +404,7 @@ def get_num_classes(dataset_name):
 
 def get_domain_sequence(ckpt_path):
     assert ckpt_path.endswith('.pth') or ckpt_path.endswith('.pt') or ckpt_path.endswith('.tar')
-    domain = ckpt_path.replace('.pth.tar', '').split(os.sep)[-1].split('_')[1]
+    domain = ckpt_path.replace('.pth', '').split(os.sep)[-1].split('_')[1]
     mapping = {"real": ["clipart", "painting", "sketch"],
                "clipart": ["sketch", "real", "painting"],
                "painting": ["real", "sketch", "clipart"],
