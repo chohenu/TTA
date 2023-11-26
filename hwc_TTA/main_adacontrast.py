@@ -18,7 +18,10 @@ import wandb
 
 from source import train_source_domain
 from target import train_target_domain as train_target_adacontrast
+from target_continual import train_target_domain as train_target_adacontrast_contiual
 from utils import configure_logger, NUM_CLASSES, use_wandb
+from omegaconf import ListConfig
+import pretty_errors
 
 @hydra.main(config_path="configs", config_name="root")
 def main(args):
@@ -125,24 +128,38 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         for src_domain in args.data.source_domains:
             args.data.src_domain = src_domain
-            for tgt_domain in args.data.target_domains:
-                if src_domain == tgt_domain:
-                    continue
-                args.data.tgt_domain = tgt_domain
+            if isinstance(args.data.target_domains, ListConfig): 
+                if use_wandb(args):
+                        wandb.init(
+                            project=args.project if args.project else args.data.dataset,
+                            group=args.memo,
+                            job_type=f"{src_domain}-{args.data.target_domains}-{args.sub_memo}",
+                            name=f"seed_{args.seed}",
+                            config=dict(args),
+                        )
+                print(args.data,'aaadddff')
+                train_target_adacontrast_contiual(args)
+                
+            else:
+                
+                for tgt_domain in args.data.target_domains:
+                    if src_domain == tgt_domain:
+                        continue
+                    args.data.tgt_domain = tgt_domain
 
-                if use_wandb(args):
-                    wandb.init(
-                        project=args.project if args.project else args.data.dataset,
-                        group=args.memo,
-                        job_type=f"{src_domain}-{tgt_domain}-{args.sub_memo}",
-                        name=f"seed_{args.seed}",
-                        config=dict(args),
-                    )
-                # main loop
-                if args.target_algorithm == "ours":
-                    train_target_adacontrast(args)
-                if use_wandb(args):
-                    wandb.finish()
+                    if use_wandb(args):
+                        wandb.init(
+                            project=args.project if args.project else args.data.dataset,
+                            group=args.memo,
+                            job_type=f"{src_domain}-{tgt_domain}-{args.sub_memo}",
+                            name=f"seed_{args.seed}",
+                            config=dict(args),
+                        )
+                    # main loop
+                    if args.target_algorithm == "ours":
+                        train_target_adacontrast(args)
+                    if use_wandb(args):
+                        wandb.finish()
 
 
 if __name__ == "__main__":

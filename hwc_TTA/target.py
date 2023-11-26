@@ -184,21 +184,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         wandb_dict['noise_avg_rec_pre'] = avg_pre_rec
         wandb_dict["only_clean_accuracy"]=only_clean_accuracy
         wandb_dict["only_noise_accuracy"]=only_noise_accuracy
-<<<<<<< HEAD
-        # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
-        # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
-        # banks.update({"mix_confidence": confidence[mix_index][rand_idxs]})
-        
-    # if False and is_master(args):
-    #     import os
-    #     save_dir = str(wandb.run.dir)
-    #     logging.info(f"Saving Memory Bank : {save_dir}")
-    #     with open(f'{save_dir}/mix_val_{epoch}.pickle','wb') as fw:
-    #         pickle.dump(banks, fw)
-
-=======
     
->>>>>>> a68ce1b5daba56b0377907a233d4b0a4053100ef
 
     # refine predicted labels
     pred_labels, _, acc = refine_predictions(
