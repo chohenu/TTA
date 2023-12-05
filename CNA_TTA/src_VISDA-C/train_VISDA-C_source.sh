@@ -1,5 +1,5 @@
 PORT=10005
-CUDA=1,2,3,4
+CUDA=1,2
 MEMO="source"
 
 for SEED in 2020 2021 2022

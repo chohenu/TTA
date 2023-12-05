@@ -1,5 +1,5 @@
 PORT=10014
-CUDA=1,2,3,4
+CUDA=1,2
 MEMO="VISDAC"
 SUB_MEMO="offline"
 SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/VISDA-C/source/"

@@ -1,5 +1,4 @@
 # syntax=docker/dockerfile:1.4
-# 최상단 주석은 작동을 위해 필요하므로 삭제하지 말 것.
 
 ARG CUDA_VERSION
 ARG CUDNN_VERSION

@@ -1,5 +1,5 @@
 PORT=10029
-CUDA=1,2,6,7
+CUDA=1,2
 SRC_DOMAINS=(real_clipart_painting_quickdraw_infograph 
             real_sketch_painting_quickdraw_infograph 
             real_sketch_clipart_quickdraw_infograph 
