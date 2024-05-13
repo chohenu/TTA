@@ -15,7 +15,7 @@ from moco.loader import GaussianBlur
 
 LOG_FORMAT = "[%(levelname)s] %(asctime)s %(filename)s:%(lineno)s %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
-NUM_CLASSES = {"domainnet-126": 126, "domainnet":345, "VISDA-C": 12, "OfficeHome":65, "pacs":7 , "office":31 }
+NUM_CLASSES = {"domainnet-126": 126, "domainnet":345, "VISDA-C": 12, "OfficeHome":65, "pacs":7 , "office":31 , 'cifar10':10}
 
 def get_class_dict(args):
     if args.data.dataset == 'pacs':
@@ -183,7 +183,8 @@ def get_augmentation(aug_type, normalize=None):
     if aug_type == "moco-v2":
         return transforms.Compose(
             [
-                transforms.RandomResizedCrop(224, scale=(0.2, 1.0)),
+                # transforms.RandomResizedCrop(34, scale=(0.2, 1.0)),
+                transforms.Resize(34, interpolation=Image.BICUBIC),
                 transforms.RandomApply(
                     [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)],
                     p=0.8,  # not strengthened
@@ -192,54 +193,58 @@ def get_augmentation(aug_type, normalize=None):
                 transforms.RandomApply([GaussianBlur([0.1, 2.0])], p=0.5),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                normalize,
+                # normalize,
             ]
         )
     elif aug_type == "moco-v1":
         return transforms.Compose(
             [
-                transforms.RandomResizedCrop(224, scale=(0.2, 1.0)),
+                # transforms.RandomResizedCrop(34, scale=(0.2, 1.0)),
+                transforms.Resize(34, interpolation=Image.BICUBIC),
                 transforms.RandomGrayscale(p=0.2),
                 transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                normalize,
+                # normalize,
             ]
         )
     elif aug_type == "plain":
         return transforms.Compose(
             [
-                transforms.Resize((256, 256)),
-                transforms.RandomCrop(224),
+                # transforms.Resize((256, 256)),
+                transforms.Resize((34, 34)),
+                transforms.RandomCrop(34),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                normalize,
+                # normalize,
             ]
         )
     elif aug_type == "clip_inference":
         return transforms.Compose(
             [
-                transforms.Resize(224, interpolation=Image.BICUBIC),
-                transforms.CenterCrop(224),
+                transforms.Resize(34, interpolation=Image.BICUBIC),
+                # transforms.CenterCrop(224),
                 transforms.ToTensor(),
-                normalize,
+                # normalize,
             ]
         )
     elif aug_type == "test":
         return transforms.Compose(
             [
-                transforms.Resize((256, 256)),
+                # transforms.Resize((256, 256)),
+                transforms.Resize((34, 34)),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
-                normalize,
+                # normalize,
             ]
         )
     elif aug_type == "rand_crop":
         return transforms.Compose(
             [
-                transforms.Resize((256, 256)),
-                transforms.RandomCrop(128),
-                transforms.Resize((224, 224)),
+                # transforms.Resize((256, 256)),
+                # transforms.RandomCrop(128),
+                # transforms.Resize((224, 224)),
+                transforms.Resize((34, 34)),
                 transforms.ToTensor(),
                 normalize,
             ]
@@ -248,7 +253,8 @@ def get_augmentation(aug_type, normalize=None):
     elif aug_type == "five_crop":
         return transforms.Compose(
             [
-                transforms.Resize((256, 256)),
+                # transforms.Resize((256, 256)),
+                transforms.Resize((34,34)),
                 transforms.FiveCrop(128)
             ]
         )

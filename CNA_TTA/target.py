@@ -180,7 +180,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
         # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
         
-    if True and use_wandb(args):
+    if False and use_wandb(args):
         import os
         save_dir = str(wandb.run.dir)
         logging.info(f"Saving Memory Bank : {save_dir}")
