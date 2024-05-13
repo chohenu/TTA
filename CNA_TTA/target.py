@@ -43,6 +43,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     # make sure to switch to eval mode
     model.eval()
     # projector = model.src_model.projector_q
+    # clustering = model.src_model.classifier_q
     clustering = model.src_model.classifier_q
     
     # run inference
@@ -52,6 +53,7 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     logging.info("Eval and labeling...")
     iterator = tqdm(dataloader) if is_master(args) else dataloader
     for data in iterator:
+
         images, labels, idxs = data
         imgs = images[0].to("cuda")
 
@@ -174,6 +176,16 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
         wandb_dict["only_clean_accuracy"]=only_clean_accuracy
         wandb_dict["only_noise_accuracy"]=only_noise_accuracy
         wandb_dict["context_noise_auc"]=context_noise_auc
+        
+        # banks.update({"noise_loss": torch.tensor(noise_loss).to("cuda")[rand_idxs]})
+        # banks.update({"confidence_list": torch.tensor(confidence_list).to("cuda")[rand_idxs]})
+        
+    if True and use_wandb(args):
+        import os
+        save_dir = str(wandb.run.dir)
+        logging.info(f"Saving Memory Bank : {save_dir}")
+        with open(f'{save_dir}/mix_val_{epoch}.pickle','wb') as fw:
+            pickle.dump(banks, fw)
 
 
     # refine predicted labels
@@ -396,34 +408,42 @@ def get_augmentation_versions(args, train=True):
 def get_target_optimizer(model, args):
     if args.distributed:
         model = model.module
-    backbone_params, extra_params = (
-        model.src_model.get_params()
-        if hasattr(model, "src_model")
-        else model.get_params()
-    )
-
-    if args.optim.name == "sgd":
-        optimizer = torch.optim.SGD(
-            [
-                {
-                    "params": backbone_params,
-                    "lr": args.optim.lr,
-                    "momentum": args.optim.momentum,
-                    "weight_decay": args.optim.weight_decay,
-                    "nesterov": args.optim.nesterov,
-                },
-                {
-                    "params": extra_params,
-                    "lr": args.optim.lr * args.optim.time,
-                    "momentum": args.optim.momentum,
-                    "weight_decay": args.optim.weight_decay,
-                    "nesterov": args.optim.nesterov,
-                },
-            ]
+        
+    if args.data.dataset.lower() != 'cifar10': 
+        backbone_params, extra_params = (
+            model.src_model.get_params()
+            if hasattr(model, "src_model")
+            else model.get_params()
         )
-    else:
-        raise NotImplementedError(f"{args.optim.name} not implemented.")
-
+        if args.optim.name == "sgd":
+            optimizer = torch.optim.SGD(
+                [
+                    {
+                        "params": backbone_params,
+                        "lr": args.optim.lr,
+                        "momentum": args.optim.momentum,
+                        "weight_decay": args.optim.weight_decay,
+                        "nesterov": args.optim.nesterov,
+                    },
+                    {
+                        "params": extra_params,
+                        "lr": args.optim.lr * args.optim.time,
+                        "momentum": args.optim.momentum,
+                        "weight_decay": args.optim.weight_decay,
+                        "nesterov": args.optim.nesterov,
+                    },
+                ]
+            )
+        else:
+            raise NotImplementedError(f"{args.optim.name} not implemented.")
+    else: 
+        optimizer = torch.optim.SGD([{
+                        "params": model.parameters(),
+                        "lr": args.optim.lr,
+                        "momentum": args.optim.momentum,
+                        "weight_decay": args.optim.weight_decay,
+                        "nesterov": args.optim.nesterov,
+                    }])
     for param_group in optimizer.param_groups:
         param_group["lr0"] = param_group["lr"]  # snapshot of the initial lr
 
@@ -511,7 +531,7 @@ def train_target_domain(args):
         val_dataset, batch_size=256, sampler=val_sampler, num_workers=2
     )
     if args.learn.sep_gmm:
-        gm = [GaussianMixture(n_components=2, random_state=0) for i in range(model.src_model.num_classes+1)]
+        gm = [GaussianMixture(n_components=2, random_state=0) for i in range(model.num_classes+1)]
     else: 
         gm = GaussianMixture(n_components=2, random_state=0)
 
@@ -520,7 +540,7 @@ def train_target_domain(args):
     )
     logging.info("2 - Computed initial pseudo labels")
     
-    args.num_clusters = model.src_model.num_classes
+    args.num_clusters = model.num_classes
     # Training data
     train_transform = get_augmentation_versions(args)
     train_dataset = ImageList(

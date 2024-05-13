@@ -31,3 +31,5 @@ hydra:
   run:
     dir: ${workdir}/${data.dataset}/${memo}
   output_subdir: .hydra-${seed}
+
+confi : 0 

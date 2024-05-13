@@ -3,9 +3,13 @@ PORT=17019
 CUDA=2,3
 SRC_DOMAINS=(art_painting art_painting art_painting photo        photo   photo)
 TGT_DOMAINS=(cartoon      photo        sketch       art_painting cartoon sketch)
-SRC_MODEL_DIR="/opt/tta/CNA_TTA/output/pacs/source"
-MEMO="pacs_online_constant_lr"
-SUB_MEMO="online_train_constant_lr"
+PORTS=(${PORT} ${PORT} ${PORT} ${PORT} ${PORT} ${PORT} ${PORT})
+CUDAS=(${CUDA} ${CUDA} ${CUDA} ${CUDA} ${CUDA} ${CUDA} ${CUDA})
+SRC_MODEL_DIR="/opt/tta/hwc_TTA/output/pacs/source"
+
+
+MEMO="pacs_online_ablation"
+SUB_MEMO="online_train_ablation"
 
 for SEED in 2021 2022 2023
 do

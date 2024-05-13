@@ -14,6 +14,9 @@ from torch.autograd import Variable
 import numpy as np
 import wandb
 import numpy as np
+from torchvision.datasets import CIFAR10, CIFAR100
+from robustbench.model_zoo.enums import ThreatModel
+from robustbench.utils import load_model
 
 from classifier import Classifier
 from image_list import ImageList, mixup_data
@@ -186,37 +189,67 @@ def train_target_domain(args):
 
     # if not specified, use the full length of dataset.
     if args.learn.queue_size == -1:
-        if args.data.dataset.lower() == 'pacs': 
-            label_file = os.path.join(
-                args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt"
-            )
-        else: 
-            label_file = os.path.join(
-                args.data.image_root, f"{args.data.tgt_domain}_list.txt"
-            )
-        dummy_dataset = ImageList(args.data.image_root, label_file)
+        if args.data.dataset.lower() == 'cifar10': 
+            path = f'/opt/tta/classification/data/CIFAR-10-C/{args.data.target_domains}.npy'
+            label_path = '/opt/tta/classification/data/CIFAR-10-C/labels.npy'
+
+            dummy_dataset = NPYDataset(root='/opt/tta/hwc_TTA', train=False, download=False, transform=None)
+            dummy_dataset.data = np.load(path)[-len(dummy_dataset.data):]
+            dummy_dataset.targets = np.load(label_path)[-len(dummy_dataset.data):]
+
+        else:
+            if args.data.dataset.lower() == 'pacs': 
+                label_file = os.path.join(
+                    args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt"
+                )
+            elif args.data.dataset.lower() == 'domainnet': 
+                label_file = os.path.join(
+                    args.data.image_root, f"{args.data.tgt_domain}_concat.txt"
+                )
+            else: 
+                label_file = os.path.join(
+                    args.data.image_root, f"{args.data.tgt_domain}_list.txt"
+                )
+            dummy_dataset = ImageList(args.data.image_root, label_file)
         data_length = len(dummy_dataset)
         args.learn.queue_size = data_length
         del dummy_dataset
 
-    checkpoint_path = os.path.join(
+    train_target = (args.data.src_domain != args.data.tgt_domain)
+    if args.data.dataset.lower() == 'cifar10': 
+        src_model = load_model(args.model_src.arch, dataset=args.data.dataset, threat_model=ThreatModel.corruptions)
+        momentum_model = load_model(args.model_src.arch, dataset=args.data.dataset, threat_model=ThreatModel.corruptions)
+    else:
+        checkpoint_path = os.path.join(
         args.model_tta.src_log_dir,
         f"best_{args.data.src_domain}_{args.seed}.pth.tar",
-    )
-    train_target = (args.data.src_domain != args.data.tgt_domain)
-    src_model = Classifier(args.model_src, train_target, checkpoint_path)
-    momentum_model = Classifier(args.model_src, train_target, checkpoint_path)
+        )
+        src_model = Classifier(args.model_src, train_target, checkpoint_path)
+        momentum_model = Classifier(args.model_src, train_target, checkpoint_path)
     
     val_transform = get_augmentation_versions(args, False)
-    if args.data.dataset.lower() == 'pacs': 
-        label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt")
+    
+    if args.data.dataset.lower() == 'cifar10': 
+        path = f'/opt/tta/classification/data/CIFAR-10-C/{args.data.target_domains}.npy'
+        label_path = '/opt/tta/classification/data/CIFAR-10-C/labels.npy'
+
+        val_dataset = NPYDataset(root='/opt/tta/hwc_TTA', train=False, download=False, transform=val_transform)
+        val_dataset.data = np.load(path)[-len(val_dataset.data):]
+        val_dataset.targets = np.load(label_path)[-len(val_dataset.data):]
+
     else: 
-        label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_list.txt")
-    val_dataset = ImageList(
-        image_root=args.data.image_root,
-        label_file=label_file,
-        transform=val_transform,
-    )
+        if args.data.dataset.lower() == 'pacs': 
+            label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_test_kfold.txt")
+        elif args.data.dataset.lower() == 'domainnet': 
+            label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_concat.txt")
+        else: 
+            label_file = os.path.join(args.data.image_root, f"{args.data.tgt_domain}_list.txt")
+            
+        val_dataset = ImageList(
+            image_root=args.data.image_root,
+            label_file=label_file,
+            transform=val_transform,
+        )
     model = CNA_MoCo(
         src_model,
         momentum_model,
@@ -253,14 +286,27 @@ def train_target_domain(args):
 
     logging.info("2 - Computed initial pseudo labels")
     
-    args.num_clusters = model.src_model.num_classes
+    # args.num_clusters = model.src_model.num_classes
+    args.num_clusters = model.num_classes
+    
     # Training data
     train_transform = get_augmentation_versions(args)
-    train_dataset = ImageList(
-        image_root=args.data.image_root,
-        label_file=label_file,  # uses pseudo labels
-        transform=train_transform,
-    )
+    if args.data.dataset.lower() == 'cifar10': 
+        path = f'/opt/tta/classification/data/CIFAR-10-C/{args.data.target_domains}.npy'
+        label_path = '/opt/tta/classification/data/CIFAR-10-C/labels.npy'
+
+        train_dataset = NPYDataset(root='/opt/tta/hwc_TTA', train=False, download=False, transform=train_transform)
+        train_dataset.data = np.load(path)[-len(train_dataset.data):]
+        train_dataset.targets = np.load(label_path)[-len(train_dataset.data):]
+
+    else: 
+        
+        train_dataset = ImageList(
+            image_root=args.data.image_root,
+            label_file=label_file,  # uses pseudo labels
+            transform=train_transform,
+            # pseudo_item_list=pseudo_item_list,
+        )
     train_sampler = DistributedSampler(train_dataset) if args.distributed else None
     train_loader = DataLoader(
         train_dataset,
@@ -332,11 +378,11 @@ def train_epoch_sfda(train_loader, model, banks,
         feats_w, logits_w = model(images_w, cls_only=True)
         with torch.no_grad():
             probs_w = F.softmax(logits_w, dim=1)
-            if use_proto := first_X_samples >= args.learn.online_length:
-                args.learn.refine_method = "nearest_neighbors"
-            else:
-                args.learn.refine_method = None
-                first_X_samples += len(feats_w)
+            # if use_proto := first_X_samples >= args.learn.online_length:
+            #     args.learn.refine_method = "nearest_neighbors"
+            # else:
+            args.learn.refine_method = None
+            first_X_samples += len(feats_w)
                 
             pseudo_labels_w, probs_w, _ = refine_predictions(
                 model, feats_w, probs_w, banks, args=args, return_index=args.learn.return_index
@@ -515,7 +561,7 @@ def train_epoch_sfda(train_loader, model, banks,
                 "acc_ins": accuracy_ins.item(),    
                 "lr": optimizer.param_groups[0]['lr']
             }
-            
+            use_proto = False
             if use_proto  and args.learn.component != 'pr':
                 matching_label = (labels.to("cuda") == logits_w.argmax(dim=1))
                 clean_idx = confidence[origin_idx] > args.learn.conf_filter

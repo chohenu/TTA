@@ -4,13 +4,33 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
+from torchvision.datasets import CIFAR10, CIFAR100
 
 def load_image(img_path):
     img = Image.open(img_path)
     img = img.convert("RGB")
     return img
 
+class NPYDataset(CIFAR10):
+    def __getitem__(self, index: int):
+        """
+        Args:
+            index (int): Index
 
+        Returns:
+            tuple: (image, target) where target is index of the target class.
+        """
+        img, target = self.data[index], self.targets[index]
+
+        # doing this so that it is consistent with all other datasets
+        # to return a PIL Image
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img, target, index
+        
 class ImageList(Dataset):
     def __init__(
         self,
