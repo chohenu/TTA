@@ -583,6 +583,42 @@ def train_target_domain(args):
             save_checkpoint(model, optimizer, epoch, save_path=save_path)
             logging.info(f"Saved checkpoint {save_path}")
         
+def confi_instance_loss(logits_ins, pseudo_labels, mem_labels, logits_neg_near, confidence, proto_sim, contrast_type):
+    # labels: positive key indicators
+    labels_ins = torch.zeros(logits_ins.shape[0], dtype=torch.long).cuda()
+    proto_label = torch.argmax(proto_sim, axis=1) 
+    # in class_aware mode, do not contrast with same-class samples
+    if contrast_type == "class_aware" and pseudo_labels is not None:
+        mask = torch.ones_like(logits_ins, dtype=torch.bool)
+        d_mask = torch.ones_like(logits_ins, dtype=torch.bool)
+        
+        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K) diff : 밀어낸다., same : 무시.
+        d_mask[:, 1:] = proto_label.reshape(-1, 1) != mem_labels  # (B, K)
+        
+        # clean_confi = confidence < 0.8 # (1, K) # Clean : 무시., Noise 밀어낸다.
+
+        clean_confi = confidence > 0.5 # (1, K) # Clean : 밀어낸다., Noise 일단 무시. 
+        
+        ## 일단 clean 안에서 본다면 어떻게 될까? 
+        clean_confi = clean_confi.unsqueeze(0).repeat(mask.size(0),1)
+
+        # d_mask[:, 1:] = d_mask[:, 1:] * clean_confi # (B, K)
+        # mask[:,1:] = mask[:,1:] * d_mask[:, 1:] # (B, K) 
+        mask[:,1:] = mask[:,1:] * clean_confi # (B, K) 
+        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
+    elif contrast_type == "nearest" and pseudo_labels is not None:
+        mask = torch.ones_like(logits_ins, dtype=torch.bool)
+        mask[:, 1:] = pseudo_labels.reshape(-1, 1) != mem_labels  # (B, K)
+        
+        _, idx_near = torch.topk(logits_neg_near, k=5, dim=-1, largest=True)
+        mask[:, 1:] *= torch.all(pseudo_labels.unsqueeze(1).repeat(1,5).unsqueeze(1) != mem_labels[idx_near].unsqueeze(0), dim=2) # (B, K)
+        logits_ins = torch.where(mask, logits_ins, torch.tensor([float("-inf")]).cuda())
+
+    loss = F.cross_entropy(logits_ins, labels_ins)
+
+    accuracy = calculate_acc(logits_ins, labels_ins)
+
+    return loss, accuracy
 
 def train_epoch_sfda(train_loader, model, banks,
                      optimizer, epoch, args):

@@ -47,7 +47,13 @@ class CNA_MoCo(nn.Module):
         self.momentum_model = momentum_model
 
         # create the fc heads
-        feature_dim = src_model.output_dim
+        if args.data.dataset.lower() == 'cifar10': 
+            feature_dim = src_model.fc.in_features
+            self.num_classes = 10
+        else: 
+            feature_dim = src_model.output_dim
+            self.num_classes = src_model.num_classes
+
 
         # freeze key model
         self.momentum_model.requires_grad_(False)
@@ -55,11 +61,11 @@ class CNA_MoCo(nn.Module):
         # create the memory bank
         self.register_buffer("mem_feat", torch.randn(feature_dim, K))
         self.register_buffer(
-            "mem_labels", torch.randint(0, src_model.num_classes, (K,))
+            "mem_labels", torch.randint(0, self.num_classes, (K,))
         )
 
         self.register_buffer(
-            "mem_probs", torch.rand(K, src_model.num_classes)
+            "mem_probs", torch.rand(K, self.num_classes)
         )
 
         self.register_buffer(
@@ -189,7 +195,7 @@ class CNA_MoCo(nn.Module):
         """
 
         # compute query features
-        feats_q, logits_q = self.src_model(im_q, return_feats=True)
+        feats_q, logits_q = self.src_model(im_q, cls_only=True)
 
         if cls_only:
             return feats_q, logits_q
@@ -203,7 +209,7 @@ class CNA_MoCo(nn.Module):
             # shuffle for making use of BN
             im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
 
-            k, logits_k = self.momentum_model(im_k, return_feats=True)
+            k, logits_k = self.momentum_model(im_k, cls_only=True)
             k = F.normalize(k, dim=1)
 
             # undo shuffle

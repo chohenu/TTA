@@ -19,7 +19,7 @@ from robustbench.model_zoo.enums import ThreatModel
 from robustbench.utils import load_model
 
 from classifier import Classifier
-from image_list import ImageList, mixup_data
+from image_list import ImageList, mixup_data, NPYDataset
 from moco.builder import CNA_MoCo
 from utils import (
     adjust_learning_rate,
@@ -55,7 +55,10 @@ def eval_and_label_dataset(dataloader, model, banks, epoch, gm, args):
     # make sure to switch to eval mode
     model.eval()
     # projector = model.src_model.projector_q
-    clustering = model.src_model.classifier_q
+    if args.data.dataset.lower() == 'cifar10': 
+        clustering = model.src_model
+    else: 
+        clustering = model.src_model.classifier_q
     
     # run inference
     logits, gt_labels, indices, cluster_labels = [], [], [], []
@@ -378,17 +381,18 @@ def train_epoch_sfda(train_loader, model, banks,
         feats_w, logits_w = model(images_w, cls_only=True)
         with torch.no_grad():
             probs_w = F.softmax(logits_w, dim=1)
-            # if use_proto := first_X_samples >= args.learn.online_length:
-            #     args.learn.refine_method = "nearest_neighbors"
-            # else:
-            args.learn.refine_method = None
-            first_X_samples += len(feats_w)
-                
-            pseudo_labels_w, probs_w, _ = refine_predictions(
-                model, feats_w, probs_w, banks, args=args, return_index=args.learn.return_index
-            )
+            if use_proto := first_X_samples >= args.learn.online_length:
+                args.learn.refine_method = "nearest_neighbors"
+            else:
+                args.learn.refine_method = None
+                first_X_samples += len(feats_w)
+                    
+                pseudo_labels_w, probs_w, _ = refine_predictions(
+                    model, feats_w, probs_w, banks, args=args, return_index=args.learn.return_index
+                )
         
         # similarity btw prototype(mean) and feats_w
+        use_proto = False
         if use_proto  and args.learn.component != 'pr': 
             # use confidence center
             cur_probs   = torch.cat([banks['probs'], probs_w], dim=0)
@@ -419,6 +423,7 @@ def train_epoch_sfda(train_loader, model, banks,
                                                         alpha, use_cuda=True)
         inputs_w, targets_w_a, targets_w_b = map(Variable, (inputs_w,
                                                     targets_w_a, targets_w_b))
+        
         
         targets_w_mix = lam_w * torch.eye(args.num_clusters).cuda()[targets_w_a] + (1-lam_w) * torch.eye(args.num_clusters).cuda()[targets_w_b]
         
@@ -547,7 +552,7 @@ def train_epoch_sfda(train_loader, model, banks,
 
         # use slow feature to update neighbor space
         with torch.no_grad():
-            feats_w, logits_w = model.momentum_model(images_w, return_feats=True)
+            feats_w, logits_w = model.momentum_model(images_w, cls_only=True)
 
         update_labels(banks, idxs, feats_w, logits_w, labels, args)
         
