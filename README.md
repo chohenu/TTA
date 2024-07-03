@@ -1,6 +1,6 @@
 This repo is followed by https://github.com/DianCh/AdaContrast
 
-# CNA-SFDA: Clean and Noisy Aware Feature Learning within Clusters for Online-Offline Source-Free Domain Adaptation 
+# CNG-SFDA: Clean-and-Noisy Region Guided Online-Offline Source-Free Domain Adaptation 
 
 ![Main figure](media/main.png)
 
