@@ -1,6 +1,6 @@
 This repo is followed by https://github.com/DianCh/AdaContrast
 
-# CNA-TTA: Clean and Noisy Aware Feature Learning within Clusters for Online-Offline Test-Time Adaptation 
+# CNA-SFDA: Clean and Noisy Aware Feature Learning within Clusters for Online-Offline Source-Free Domain Adaptation 
 
 ![Main figure](media/main.png)
 
