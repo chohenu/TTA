@@ -1,0 +1,16 @@
+name: "sgd"
+lr: 1e-2
+momentum: 0.9
+weight_decay: 1e-4
+nesterov: true
+
+cos: false
+exp: false
+<<<<<<< HEAD:hwc_TTA/configs/optim/sgd.yaml
+const: true
+=======
+no_sch: false
+>>>>>>> origin/CVPR2024:CNG_SFDA/configs/optim/sgd.yaml
+schedule: [10, 20]
+gamma: 0.2
+time: 1

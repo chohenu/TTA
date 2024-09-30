@@ -1,21 +1,17 @@
 .env
 __pycache__
-classification/data/
-segmentation/datasets/
-classification/ckpt/*
-classification/output/
 
 ckpt/
 output/
 datasets/
-*png
+CNA_TTA/.ipynb_checkpoints/
+CNA_TTA/output/
+imgs/
+save/
 
 .vscode/
 .imgs/
 
-thrid_party/Twin-Contrastive-Learning/save
-thrid_party/Twin-Contrastive-Learning/datasets
-thrid_party/TCL/dataset
 
 AdaContrast/checkpoint
 AdaContrast/output
@@ -23,6 +19,7 @@ AdaContrast/datasets
 AdaContrast/data/
 AdaContrast/debug/
 AdaContrast/select/
+debug/
 
 classification/.ipynb_checkpoints/
 classification/models/.ipynb_checkpoints/
@@ -33,3 +30,23 @@ AdaContrast/clustering/
 select/domainnet-126/
 select/VISDA-C/
 cmpark_AdaContrast/
+bsu_ss/logs/
+bsu_ss/
+hwc_TTA/*
+classification
+hwc_TTA/robustbench
+hwc_TTA/src_domainnet
+hwc_TTA/src_office
+hwc_TTA/src_OfficeHome
+hwc_TTA/src_pacs
+hwc_TTA/src_VISDA-C
+outputs
+sample
+segmentation/*
+thrid_party/*
+models
+classification/*
+AdaContrast/*
+bird/*
+hwc_TTA/notebook
+hwc_TTA/thrid_party/*
